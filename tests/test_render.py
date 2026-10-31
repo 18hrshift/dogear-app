@@ -2,15 +2,19 @@
 
 import hashlib
 import wave
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from dogear.document import Section
+from dogear.language_match import primary
 from dogear.narration import SectionNarration, Utterance
 from dogear.render import render_book
 from dogear.render.cache import SpeechCache
 from dogear.render.progress import Progress
+from dogear.render.voices import OneVoice
 from dogear.render.wav import WavWriter, read_wav, to_pcm16, trim_edges, write_wav
 from dogear.voice.engine import SpeechPlan
 
@@ -71,9 +75,10 @@ def work_dir(tmp_path):
     return folder
 
 
-def render(narrations, config, work_dir, engine=None, lines=None):
-    """render_book with a fake clock. Returns the chapters and the Progress used."""
-    engine = engine or ToneEngine()
+def render(narrations, config, work_dir, engine=None, lines=None, voices=None):
+    """render_book with a fake clock, and `voices` or one voice, `engine` (by default a
+    ToneEngine). Returns the chapters and the Progress used."""
+    voices = voices or OneVoice(engine or ToneEngine())
     lines = [] if lines is None else lines
     progress = Progress(
         total_words=sum(n.words() for n in narrations),
@@ -82,7 +87,7 @@ def render(narrations, config, work_dir, engine=None, lines=None):
         report=lines.append,
         clock=Clock(),
     )
-    chapters = render_book(narrations, engine, config, work_dir, lines.append, progress)
+    chapters = render_book(narrations, voices, config, work_dir, lines.append, progress)
     return chapters, progress
 
 
@@ -231,8 +236,92 @@ def test_progress_lines_come_from_the_render(config, work_dir):
 
 def test_render_book_makes_its_own_progress(config, work_dir):
     lines = []
-    render_book([narration(1, "A", said("One."))], ToneEngine(), config, work_dir, lines.append)
+    render_book(
+        [narration(1, "A", said("One."))], OneVoice(ToneEngine()), config, work_dir, lines.append
+    )
     assert lines == ["Section 1 of 1 done: A."]
+
+
+# More than one voice
+
+
+class HalfRateTone(ToneEngine):
+    """A second voice, at half the sample rate: the same tone, half as many samples."""
+
+    sample_rate = RATE // 2
+
+    def plan(self, text: str) -> SpeechPlan:
+        return SpeechPlan(key=hashlib.sha256(f"half\n{text}".encode()).hexdigest(), payload=text)
+
+    def render(self, plan: SpeechPlan) -> np.ndarray:
+        return super().render(plan)[::2]
+
+
+@dataclass
+class ByLanguage:
+    """Voices by the first part of a language tag; English for anything else."""
+
+    engines: dict[str, object]
+
+    @property
+    def sample_rate(self) -> int:
+        return max(e.sample_rate for e in self.engines.values())
+
+    def for_language(self, lang):
+        return self.engines.get(primary(lang), self.engines["en"])
+
+
+def said_in(text: str, lang: str, pause_ms: int = 0) -> Utterance:
+    return Utterance(text, text, pause_ms, lang)
+
+
+@pytest.fixture
+def two_voices():
+    return ByLanguage({"en": ToneEngine(), "fr": HalfRateTone()})
+
+
+def test_each_utterance_is_said_by_its_languages_voice(config, work_dir, two_voices):
+    narrations = [narration(1, "T", said_in("Hello.", "en"), said_in("Bonjour.", "fr-CA"))]
+    [chapter], _ = render(narrations, config, work_dir, voices=two_voices)
+    assert two_voices.engines["en"].rendered == ["Hello."]
+    assert two_voices.engines["fr"].rendered == ["Bonjour."]
+    assert chapter.sample_rate == RATE
+    with wave.open(str(chapter.path), "rb") as w:
+        assert w.getframerate() == RATE
+
+
+def test_a_voice_at_another_rate_is_resampled_and_the_marks_stay_exact(
+    config, work_dir, two_voices
+):
+    narrations = [
+        narration(1, "T", pause(500), said_in("Hi.", "en", 300), said_in("Salut.", "fr", 700))
+    ]
+    [chapter], _ = render(narrations, config, work_dir, voices=two_voices)
+    hi = len("Hi.") * TONE_PER_CHAR + 2 * kept(config)
+    # Trimmed at its own rate (half the samples), then twice as many at the book's.
+    salut = 2 * (len("Salut.") * TONE_PER_CHAR // 2 + 2 * (kept(config) // 2))
+    assert chapter.marks == (
+        0,
+        frames(500),
+        frames(500) + hi + frames(300),
+        frames(500) + hi + frames(300) + salut + frames(700),
+    )
+    audio = samples(chapter.path)
+    assert len(audio) == chapter.marks[-1]
+    # The French tone is heard where its mark says, at the book's rate.
+    start = chapter.marks[2] + kept(config) + 4
+    assert np.abs(audio[start : start + len("Salut.") * TONE_PER_CHAR - 8]).min() > 1000
+
+
+def test_each_voice_caches_at_its_own_rate(config, work_dir, two_voices):
+    narrations = [narration(1, "T", said_in("Hi.", "en"), said_in("Salut.", "fr"))]
+    render(narrations, config, work_dir, voices=two_voices)
+    cached = sorted((Path(config["render"]["cache_dir"]) / "speech").rglob("*.wav"))
+    assert sorted(read_wav(path)[1] for path in cached) == [RATE // 2, RATE]
+    again = ByLanguage({"en": ToneEngine(), "fr": HalfRateTone()})
+    _, progress = render(narrations, config, work_dir, voices=again)
+    assert again.engines["en"].rendered == again.engines["fr"].rendered == []
+    assert progress.cached_sentences == 2
 
 
 # The speech cache

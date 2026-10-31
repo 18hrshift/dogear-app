@@ -26,16 +26,20 @@ def semantics(el: etree._Element) -> frozenset[str]:
     """The element's epub:type tokens plus its DPUB-ARIA roles without 'doc-'.
 
     `role="doc-footnote"` and `epub:type="footnote"` mean the same thing, so both come
-    out as "footnote".
+    out as "footnote". A document parsed as HTML, not XML, has no namespaces, so there
+    the attribute is named "epub:type" as written.
     """
-    tokens = set((el.get(EPUB_TYPE) or "").split())
+    tokens = set((el.get(EPUB_TYPE) or el.get("epub:type") or "").split())
     tokens.update(role.removeprefix("doc-") for role in (el.get("role") or "").split())
     return frozenset(tokens)
 
 
 def lang_of(el: etree._Element, inherited: str | None) -> str | None:
-    """The element's own xml:lang or lang, else the language it inherits."""
-    lang = (el.get(XML_LANG) or el.get("lang") or "").strip()
+    """The element's own xml:lang or lang, else the language it inherits.
+
+    In a document parsed as HTML, xml:lang is an attribute named "xml:lang" as written.
+    """
+    lang = (el.get(XML_LANG) or el.get("xml:lang") or el.get("lang") or "").strip()
     return lang or inherited
 
 

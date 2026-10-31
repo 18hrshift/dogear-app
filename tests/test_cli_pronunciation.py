@@ -16,7 +16,7 @@ def book(monkeypatch):
         source_path=Path("test.epub"),
         source_format="epub",
     )
-    monkeypatch.setattr(cli, "extract_book", lambda path, config: book)
+    monkeypatch.setattr(cli, "extract_book", lambda path, config, report: book)
     return book
 
 

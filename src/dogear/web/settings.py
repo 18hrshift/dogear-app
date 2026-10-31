@@ -18,10 +18,12 @@ class WebSettings:
     dir: Path  # books, what's made from them, and the access key
     port: int
     lan: bool  # listen on every interface, for phones on the same network
+    show_network_address: bool  # with lan, a link with the address this computer finds
     max_upload_bytes: int
     read_timeout_seconds: float
     config_file: Path | None  # passed on to every child, so books use the same settings
     word_limits: WordLimits
+    words_listed: int  # the most words a book's word check keeps and lists
 
     @property
     def listen_host(self) -> str:
@@ -77,6 +79,7 @@ def web_settings(
         "max_pronunciations",
         "max_word_chars",
         "max_spelling_chars",
+        "max_words_listed",
     ):
         if web[name] <= 0:
             raise ConfigError(f"web.{name} must be more than 0, got {web[name]}.")
@@ -84,6 +87,7 @@ def web_settings(
         dir=web_dir(config).resolve(),
         port=chosen_port,
         lan=lan,
+        show_network_address=web["show_network_address"],
         max_upload_bytes=web["max_upload_mb"] * 1024 * 1024,
         read_timeout_seconds=float(web["read_timeout_seconds"]),
         config_file=config_file.resolve() if config_file is not None else None,
@@ -92,4 +96,5 @@ def web_settings(
             word_chars=web["max_word_chars"],
             spelling_chars=web["max_spelling_chars"],
         ),
+        words_listed=web["max_words_listed"],
     )

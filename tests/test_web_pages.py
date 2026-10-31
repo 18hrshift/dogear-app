@@ -14,6 +14,7 @@ ERROR_PAGES = {
     "home-upload-error",
     "choose-errors",
     "choose-language-errors",
+    "choose-language-voices-errors",
     "access-error",
     "words-errors",
     "words-changed",
@@ -26,7 +27,10 @@ ERROR_PAGES = {
 # or an error in one form or another.
 SAME_PAGE = [
     {"home-empty", "home-books", "home-deleted"},
-    {"words-list", "words-saved"},
+    {"choose-language", "choose-language-voices"},
+    {"choose-language-errors", "choose-language-voices-errors"},
+    {"send-text", "send-text-languages"},
+    {"words-list", "words-saved", "words-many"},
     {"words-errors", "words-changed"},
     {"pronunciations-empty", "pronunciations-full", "pronunciations-added"},
     {
@@ -40,6 +44,8 @@ SAME_PAGE = [
 WORD_PAGES = {
     "words-list",
     "words-saved",
+    "words-many",
+    "words-all",
     "words-errors",
     "words-changed",
     "pronunciations-full",
@@ -73,11 +79,18 @@ def test_every_state_has_a_page(pages):
         "home-books",
         "home-deleted",
         "reading",
+        "reading-ocr",
+        "read-stopped",
         "unreadable",
         "choose",
         "choose-errors",
         "choose-language",
         "choose-language-errors",
+        "choose-cloud",
+        "send-text",
+        "send-text-languages",
+        "choose-language-voices",
+        "choose-language-voices-errors",
         "waiting",
         "making",
         "making-long",
@@ -95,6 +108,8 @@ def test_every_state_has_a_page(pages):
         "words-checking",
         "words-list",
         "words-saved",
+        "words-many",
+        "words-all",
         "words-empty",
         "words-errors",
         "words-changed",
@@ -204,15 +219,41 @@ def test_error_pages_sum_up_the_errors_and_mark_each_field(pages):
             assert page.xpath(f"//*[contains(@aria-describedby, '{message.get('id')}')]"), name
 
 
+def test_a_book_in_another_language_offers_its_voices_first(pages):
+    page = pages["choose-language-voices"]
+    groups = page.xpath("//select[@id='voice']/optgroup/@label")
+    assert groups[0] == "Voices for this book's language (fr)"
+    assert page.xpath("//select[@id='voice']//option[@selected]/@value") == ["lilt:fr_one"]
+    # With a voice for its language, reading it as English is a choice, not required.
+    assert "Language" in [legend.text_content() for legend in page.xpath("//legend")]
+    assert page.xpath("//input[@id='english'][not(@checked)]")
+    errors = pages["choose-language-voices-errors"]
+    [message] = errors.xpath("//p[@id='voice-error']")
+    assert "doesn't speak fr" in message.text_content()
+    # Without one, it is required, as before.
+    legends = [legend.text_content() for legend in pages["choose-language"].xpath("//legend")]
+    assert "Language (required)" in legends
+
+
 def test_choices_sent_back_with_errors_are_kept(pages):
     page = pages["choose-errors"]
-    assert page.xpath("//select[@id='voice']/option[@selected]/@value") == ["af_heart"]
+    assert page.xpath("//select[@id='voice']//option[@selected]/@value") == ["kokoro:af_heart"]
     assert page.xpath("//input[@name='speed'][@checked]/@value") == ["0.9"]
     assert page.xpath("//input[@name='format'][@checked]") == []
 
 
 def test_book_pages_have_a_status_region(pages):
-    for name in ("reading", "waiting", "making", "done", "failed", "stopped", "unreadable"):
+    for name in (
+        "reading",
+        "reading-ocr",
+        "read-stopped",
+        "waiting",
+        "making",
+        "done",
+        "failed",
+        "stopped",
+        "unreadable",
+    ):
         [region] = pages[name].xpath("//*[@role='status']")
         assert region.text_content().strip(), name
     making = pages["making"].xpath("//*[@role='status']")[0].text_content()
@@ -222,12 +263,36 @@ def test_book_pages_have_a_status_region(pages):
 
 
 def test_pages_being_made_work_without_javascript(pages):
-    for name in ("reading", "waiting", "making"):
+    for name in ("reading", "reading-ocr", "waiting", "making"):
         page = pages[name]
         assert page.xpath("//a[@id='check-progress']/text()") == ["Check progress"], name
         assert page.xpath("//script/@src") == ["/static/progress.js"], name
-    for name in ("done", "failed", "choose", "home-books"):
+    for name in ("done", "failed", "read-stopped", "choose", "home-books"):
         assert not pages[name].xpath("//script"), name
+
+
+def test_reading_a_scanned_pdf_shows_its_progress_and_can_be_stopped(pages):
+    page = pages["reading-ocr"]
+    status = page.xpath("//*[@role='status']")[0].text_content()
+    assert status == "Read 20 of 240 pages with OCR. About 8 minutes left."
+    lines = page.xpath("//ol[@id='progress-lines']/li/text()")
+    assert lines[0].startswith("This PDF is scanned, so Dogear is reading its 240 pages")
+    assert len(lines) == 4
+    assert page.xpath("//form[@action][button]/button/text()") == ["Stop reading this book"]
+    assert page.xpath("//*[@id='live-status']/@data-continues") == ["reading"]
+    # An ordinary book being read has no lines yet, and says what reading is for.
+    reading = pages["reading"].xpath("//*[@role='status']")[0].text_content()
+    assert reading.startswith("Reading the book to find its sections.")
+
+
+def test_a_stopped_read_says_so_and_can_be_read_again(pages):
+    page = pages["read-stopped"]
+    assert page.xpath("//h1/text()") == ["Reading this book stopped"]
+    status = page.xpath("//*[@role='status']")[0].text_content()
+    assert status == "Stopped. Choose Read again to carry on."
+    buttons = page.xpath("//form/button/text()")
+    assert "Read again" in buttons and "Stop reading this book" not in buttons
+    assert len(page.xpath("//ol[@id='progress-lines']/li")) == 2
 
 
 def test_actions_are_buttons_and_links_go_somewhere(pages):

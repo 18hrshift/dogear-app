@@ -2,8 +2,8 @@
 
 For libraries, schools, and volunteer groups that want Dogear's web page on a shared
 computer or server. The image holds Dogear, the programs it runs (ffmpeg, eSpeak NG, and
-Tesseract), and the default voice, so once it is built it works with no internet
-connection.
+Tesseract with its English language pack, for reading scanned PDFs), and the default
+voice, so once it is built it works with no internet connection.
 
 ## Build the image
 
@@ -26,11 +26,12 @@ docker run -d --name dogear -p 8765:8765 -v dogear-data:/data --restart unless-s
 docker logs dogear
 ```
 
-The log shows the access link. On the computer running Docker, open the first link,
+The log shows the access link. On the computer running Docker, open it:
 `http://127.0.0.1:8765/start?key=...`. On other computers and phones, use the same link
 with this computer's network address in place of `127.0.0.1`, such as
-`http://192.168.1.20:8765/start?key=...`. (The log's second link names the container's
-own address, which other devices can't reach.)
+`http://192.168.1.20:8765/start?key=...`, as the log says. (Inside the container, Dogear
+can find only the container's own address, which other devices can't reach, so the
+image's settings turn off `show_network_address` and the log shows no second link.)
 
 `-p 8765:8765` lets every device on the network reach the page. To keep it to this
 computer only, use `-p 127.0.0.1:8765:8765` instead.

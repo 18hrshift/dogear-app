@@ -30,21 +30,36 @@ from dogear.document import (
     block_text,
 )
 from dogear.errors import DogearError
-from dogear.extract import extract_book
-from dogear.make import MakeRequest, make_audiobook, parse_formats, parse_sections
+from dogear.extract import extract_book, format_names
+from dogear.language_match import primary
+from dogear.make import (
+    MakeRequest,
+    guesser_for,
+    make_audiobook,
+    parse_formats,
+    parse_sections,
+    settle_language,
+)
 from dogear.narration import narrate_book
 from dogear.ocr import default_output_path, ocr_pdf
 from dogear.pronunciations import dictionary_from_config
 from dogear.say import say_text
 from dogear.unknown_words import WordsRequest, find_unknown_words, words_to_json
-from dogear.voice import find_voice, prepare_kokoro
-from dogear.voice.catalog import describe_voice, kokoro_voices_best_first
+from dogear.voice import prepare_voice
+from dogear.voice.check import check_voice_files
+from dogear.voice.cloud import ALLOW_OPTION, sends_text, text_goes_to
+from dogear.voice.engines import ChosenVoice, choose_voice, describe_voice, installed
+from dogear.voice.language_voices import LanguageVoices
 from dogear.web.child import UTF8_OUTPUT_ENV
 from dogear.web.server_watch import stop_with_server_when_asked
 
-PROGRESS_EVERY = 10  # pages between OCR progress lines
-BOOK_HELP = "the book file: EPUB, PDF, MOBI, or AZW3"
+BOOK_HELP = f"the book file: {format_names('or')}"
 SECTIONS_HELP = "only these sections from outline, such as 3 or 1-3,7"
+VOICE_HELP = "voice name, from `dogear voices`, or engine:name such as kokoro:af_heart"
+ALLOW_CLOUD_HELP = (
+    "allow a voice that sends the text it speaks off this computer, for this run only "
+    "(Dogear says where first)"
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -67,8 +82,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("Stopped.", file=sys.stderr)
         if args.run is _make:
+            # Spoken sentences, and pages of a scanned PDF read with OCR, are kept as
+            # they're done. (A stopped OCR says so itself, for every command.)
             print(
-                "Sentences spoken so far are saved. Run the same command again to continue.",
+                "What was done so far is saved. Run the same command again to carry on.",
                 file=sys.stderr,
             )
         return 130
@@ -133,8 +150,10 @@ def _parser() -> argparse.ArgumentParser:
     text.add_argument(
         "--spoken",
         action="store_true",
-        help="show each sentence the way the voice will say it",
+        help="show each sentence the way the voice will say it, and which voice says it",
     )
+    text.add_argument("--voice", help=f"with --spoken: the main voice; {VOICE_HELP}")
+    text.add_argument("--language", help="the book's language, if its own label is wrong")
     text.set_defaults(run=_text)
 
     make = commands.add_parser(
@@ -159,8 +178,9 @@ def _parser() -> argparse.ArgumentParser:
         "MP3 files), epub (EPUB 3 talking book), daisy (DAISY 2.02 talking book), or all "
         "(default: from config)",
     )
-    make.add_argument("--voice", help="voice name, from `dogear voices`")
+    make.add_argument("--voice", help=VOICE_HELP)
     make.add_argument("--speed", type=float, help="speaking pace, such as 0.9 or 1.1")
+    make.add_argument("--allow-cloud", action="store_true", help=ALLOW_CLOUD_HELP)
     make.add_argument("--sections", metavar="LIST", help=SECTIONS_HELP)
     make.add_argument("--language", help="the book's language, if its own label is wrong")
     make.set_defaults(run=_make)
@@ -202,8 +222,9 @@ def _parser() -> argparse.ArgumentParser:
     say.add_argument(
         "-o", "--output", type=Path, required=True, help="the WAV file to save, such as test.wav"
     )
-    say.add_argument("--voice", help="voice name, from `dogear voices`")
+    say.add_argument("--voice", help=VOICE_HELP)
     say.add_argument("--speed", type=float, help="speaking pace, such as 0.9 or 1.1")
+    say.add_argument("--allow-cloud", action="store_true", help=ALLOW_CLOUD_HELP)
     say.add_argument(
         "--phonemes",
         action="store_true",
@@ -215,27 +236,42 @@ def _parser() -> argparse.ArgumentParser:
         "voices",
         parents=[common],
         help="list the voices",
-        description="List the voices Dogear can use, best rated first.",
+        description=(
+            "List the voices Dogear can use: every installed voice engine's, best first. "
+            "Kokoro comes with Dogear; other engines are installed as plugins."
+        ),
     )
     voices.set_defaults(run=_voices)
 
     download = commands.add_parser(
         "download",
         parents=[common],
-        help="download the voice now",
+        help="download the voice now, or check the voice files",
         description=(
             "Download the configured voice ahead of time, for example before going offline. "
-            "`dogear make` does this by itself when needed."
+            "`dogear make` does this by itself when needed. With --check, check every voice "
+            "file Dogear has against its checksum instead, and download again any that are "
+            "damaged."
         ),
     )
-    download.add_argument("--voice", help="voice name, from `dogear voices`")
+    download_what = download.add_mutually_exclusive_group()
+    download_what.add_argument("--voice", help=VOICE_HELP)
+    download_what.add_argument(
+        "--check",
+        action="store_true",
+        help="check every voice file on disk, and download again any that are damaged",
+    )
     download.set_defaults(run=_download)
 
     ocr = commands.add_parser(
         "ocr",
         parents=[common],
-        help="make a scanned PDF readable",
-        description="Add a text layer to a scanned PDF so Dogear can read it.",
+        help="save a scanned PDF with a text layer",
+        description=(
+            "Save a copy of a scanned PDF with a text layer, read with OCR (Tesseract), for "
+            "other programs to read as well. Dogear's other commands read a scanned PDF "
+            "with OCR by themselves."
+        ),
     )
     ocr.add_argument("pdf", type=Path, help="the scanned PDF")
     ocr.add_argument("-o", "--output", type=Path, help="where to save (default: NAME_ocr.pdf)")
@@ -265,7 +301,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _outline(args: argparse.Namespace, config: Config) -> int:
-    summary = summarize(extract_book(args.book, config))
+    summary = summarize(extract_book(args.book, config, _report))
     if args.json:
         # ASCII only, so any program can read it whatever the console's encoding.
         print(json.dumps(summary_to_json(summary), indent=2))
@@ -286,9 +322,12 @@ def _outline(args: argparse.Namespace, config: Config) -> int:
 
 
 def _text(args: argparse.Namespace, config: Config) -> int:
+    _apply_voice_options(args, config)
     if args.spoken or args.words:
         _use_word_files(args, config)
-    book = extract_book(args.book, config)
+    book = extract_book(args.book, config, _report)
+    if args.language:
+        book.metadata.language = args.language
     sections = _chosen_sections(book, args.section)
     if args.spoken:
         _print_spoken(book, config, {number for number, _ in sections})
@@ -304,20 +343,45 @@ def _text(args: argparse.Namespace, config: Config) -> int:
 
 
 def _print_spoken(book: Book, config: Config, wanted: set[int]) -> None:
-    """Each section the way the voice will read it, one utterance per line."""
-    narrated = {n.number: n for n in narrate_book(book, config)}
+    """Each section the way the voices will read it, one utterance per line. In a book
+    with more than one language or voice, a line in brackets says where each starts."""
+    choices = LanguageVoices.from_config(config)
+    settle_language(book, choices, _report)
+    guesser = guesser_for(config, choices, _report)
+    narrated = {n.number: n for n in narrate_book(book, config, guesser)}
     paragraph_ms = config["narration"]["pauses"]["paragraph_ms"]
+    readers = {
+        (primary(u.lang), choices.voice_for(u.lang).spec)
+        for n in narrated.values()
+        for u in n.utterances
+        if u.spoken
+    }
     for number in sorted(wanted):
         print(f"Section {number}: {book.sections[number - 1].title}")
         print()
         if number not in narrated:
             print("Not read aloud: its notes are read where the text refers to them.")
+        reading = None
         for utterance in narrated[number].utterances if number in narrated else []:
-            if utterance.spoken:
-                print(utterance.spoken)
-                if utterance.pause_ms >= paragraph_ms:
-                    print()
+            if not utterance.spoken:
+                continue
+            reader = (primary(utterance.lang), choices.voice_for(utterance.lang).spec)
+            if len(readers) > 1 and reader != reading:
+                print(_reader_line(utterance.lang, choices))
+                reading = reader
+            print(utterance.spoken)
+            if utterance.pause_ms >= paragraph_ms:
+                print()
         print()
+
+
+def _reader_line(lang: str | None, choices: LanguageVoices) -> str:
+    """'[In fr, read by piper:fr_FR-mls-medium.]'"""
+    voice = choices.voice_for(lang)
+    language = primary(lang)
+    if choices.speaks(lang):
+        return f"[In {language}, read by {voice.spec}.]"
+    return f"[In {language}, read by {voice.spec}, which doesn't speak it.]"
 
 
 def _chosen_sections(book: Book, wanted: int | None) -> list[tuple[int, Section]]:
@@ -422,28 +486,77 @@ def _use_word_files(args: argparse.Namespace, config: Config) -> None:
 
 
 def _voices(args: argparse.Namespace, config: Config) -> int:
-    default = config["voice"]["voice"]
-    ranked = kokoro_voices_best_first()
-    print(f"{count(len(ranked), 'voice')}, best rated first. Grades are Kokoro's own, A best.")
-    print()
-    for number, voice in enumerate(ranked, start=1):
-        note = " This is the one Dogear uses now." if voice.name == default else ""
-        print(f"{number}. {describe_voice(voice)}.{note}")
-    print()
-    print("To use another, add --voice NAME to `dogear make`, or set voice in your config.")
+    found = installed()
+    using = (config["voice"]["engine"], config["voice"]["voice"])
+    any_cloud = False
+    for engine in found.engines:
+        voices = engine.voices_in(config)
+        print(
+            f"{engine.title}, licensed {engine.plugin.license}: "
+            f"{count(len(voices), 'voice')}. {engine.plugin.about_voices}"
+        )
+        print()
+        for number, voice in enumerate(voices, start=1):
+            host = text_goes_to(ChosenVoice(engine, voice), config)
+            any_cloud = any_cloud or host is not None
+            where = f" ({sends_text(host)})" if host else ""
+            note = " This is the one Dogear uses now." if (engine.name, voice.name) == using else ""
+            print(f"{number}. {describe_voice(voice)}{where}.{note}")
+        print()
+    if any_cloud:
+        allowed = (
+            "Your settings allow them: allow_cloud is true under [voice]."
+            if config["voice"]["allow_cloud"]
+            else f"Dogear uses one only if you allow it: add {ALLOW_OPTION} to `dogear make` "
+            "or `dogear say`, or set allow_cloud = true under [voice] in your settings file."
+        )
+        print(
+            "Voices marked as sending the book's text are spoken by a service on another "
+            f"computer, and the text they speak is sent there. {allowed}"
+        )
+        print()
+    for broken in found.broken:
+        print(
+            f"The voice engine {broken.name}, from {broken.package}, is installed but can't be "
+            f"used, so its voices aren't listed. {broken.problem} Reinstall it, or uninstall it "
+            "if you don't need it."
+        )
+        print()
+    if not any(e.name == using[0] and e.voice(using[1], config) for e in found.engines):
+        print(
+            f"Your settings choose the voice {using[1]} of the engine {using[0]}, which isn't here."
+        )
+        print()
+    print(
+        "To use another voice, add --voice NAME to `dogear make`, or set voice and its engine "
+        "under [voice] in your config. If two engines have a voice of the same name, put the "
+        "engine's name and a colon first, such as kokoro:af_heart."
+    )
     return 0
 
 
 def _download(args: argparse.Namespace, config: Config) -> int:
+    if args.check:
+        check_voice_files(config, lambda line: print(line, flush=True), _report)
+        return 0
     _apply_voice_options(args, config)
-    setup = prepare_kokoro(config, _report)
-    print(f"The voice {setup.voice.name} is ready to use offline.")
+    chosen = prepare_voice(config, _report)
+    host = text_goes_to(chosen, config)
+    if host is None:
+        print(f"The voice {chosen.voice.name} is ready to use offline.")
+    else:
+        print(
+            f"The voice {chosen.voice.name} has nothing to download: it is spoken by a service "
+            f"at {host}, so it needs the internet, and sends the text it speaks there."
+        )
     return 0
 
 
 def _apply_voice_options(args: argparse.Namespace, config: Config) -> None:
+    if getattr(args, "allow_cloud", False):
+        config["voice"]["allow_cloud"] = True
     if getattr(args, "voice", None):
-        config["voice"]["voice"] = find_voice(args.voice).name
+        choose_voice(config, args.voice)
     if getattr(args, "speed", None) is not None:
         if not 0.5 <= args.speed <= 2.0:
             raise DogearError(
@@ -463,12 +576,7 @@ def _ocr(args: argparse.Namespace, config: Config) -> int:
     if args.dpi:
         config["ocr"]["dpi"] = args.dpi
     output = args.output or default_output_path(args.pdf)
-
-    def progress(done: int, total: int) -> None:
-        if done % PROGRESS_EVERY == 0 or done == total:
-            print(f"OCR: page {done} of {total} done.", file=sys.stderr)
-
-    pages = ocr_pdf(args.pdf, output, config, progress)
+    pages = ocr_pdf(args.pdf, output, config, _report)
     print(f"Saved {count(pages, 'page')} with a text layer to {output}")
     return 0
 

@@ -9,8 +9,13 @@
 <form method="post" action="/books/{{ book_id }}/choose" novalidate>
   {% if ask_language %}
   <fieldset class="{% if errors.get('english') %}has-error{% endif %}" aria-describedby="{{ describedby('english-hint', errors, 'english', 'english-error') }}">
+    {% if language_voices %}
+    <legend>Language</legend>
+    <p class="hint" id="english-hint">This book says it is in the language with the code "{{ summary.language }}". The voices that speak it are listed first under Voice, and the best of them is chosen. Books are sometimes marked with the wrong language, so if this one is in English, choose Read it as English instead.</p>
+    {% else %}
     <legend>Language (required)</legend>
-    <p class="hint" id="english-hint">This book says it is in the language with the code "{{ summary.language }}". Dogear's voice speaks only English. Books are sometimes marked with the wrong language, so if this one is in English, choose Read it as English.</p>
+    <p class="hint" id="english-hint">This book says it is in the language with the code "{{ summary.language }}". None of Dogear's voices speaks it. Books are sometimes marked with the wrong language, so if this one is in English, choose Read it as English.</p>
+    {% endif %}
     {{ error_message(errors, "english", "english-error") }}
     <div class="choice">
       <input type="checkbox" id="english" name="english" value="yes"{% if picked.as_english %} checked{% endif %}>
@@ -34,11 +39,15 @@
 
   <div class="field{% if errors.get('voice') %} has-error{% endif %}">
     <label for="voice">Voice</label>
-    <p class="hint" id="voice-hint">Best rated first. The grades are the voice makers' own, A best.</p>
+    <p class="hint" id="voice-hint">{% if language_voices %}The voices for this book's language come first. The others are grouped{% else %}Grouped{% endif %} by the voice engine that speaks them, best first in each group. Grades are the voice makers' own, A best.{% if cloud_voices %} A voice marked "sends the book's text" is spoken by a service on another computer, which is sent the book's text. Dogear asks before sending any.{% endif %}</p>
     {{ error_message(errors, "voice", "voice-error") }}
     <select id="voice" name="voice" aria-describedby="{{ describedby('voice-hint', errors, 'voice', 'voice-error') }}">
-      {% for voice in voices %}
-      <option value="{{ voice.value }}"{% if voice.value == picked.voice %} selected{% endif %}>{{ voice.label }}</option>
+      {% for group in voices %}
+      <optgroup label="{{ group.label }}">
+        {% for voice in group.options %}
+        <option value="{{ voice.value }}"{% if voice.value == picked.voice %} selected{% endif %}>{{ voice.label }}</option>
+        {% endfor %}
+      </optgroup>
       {% endfor %}
     </select>
   </div>

@@ -4,6 +4,14 @@ Structure a sighted reader sees (headings, paragraphs, images, notes, scene brea
 turned into words and pauses a listener can hear. Longer pauses mark bigger breaks: a
 sentence, a paragraph, a heading, a scene, a chapter. Every choice here comes from the
 [narration] settings.
+
+Each utterance knows its language, so the renderer can give it the voice for that
+language: the one the book marks on its block or chapter, else the book's. With a
+`LanguageGuesser` (from [language_detection]), text the book leaves to the book's own
+language is checked too: a block whose language is guessed carries it in its passage,
+and a sentence of a long paragraph guessed to be in yet another language carries it on
+its utterance. The words narration adds ("Image", "Note") come from that language's
+table in [narration.words].
 """
 
 from __future__ import annotations
@@ -26,7 +34,10 @@ from dogear.document import (
     SceneBreak,
     Section,
     Table,
+    block_text,
 )
+from dogear.language_detection import LanguageGuesser
+from dogear.language_match import most_specific, same_language
 from dogear.speech.normalize import SpeechRules, normalize_for_speech, normalize_heading
 from dogear.speech.sentences import SentenceRules, split_sentences
 
@@ -40,6 +51,7 @@ class Utterance:
     text: str  # display text, for read-along output; "" for a pure pause
     spoken: str  # what the voice says; "" for a pure pause
     pause_ms: int  # silence after it
+    lang: str | None = None  # its language, a BCP 47 tag; None if the book gives none
 
 
 @dataclass(frozen=True)
@@ -77,9 +89,12 @@ class SectionNarration:
         return sum(len(u.spoken.split()) for u in self.utterances)
 
 
-def narrate_book(book: Book, config: Config) -> list[SectionNarration]:
-    """Every section's narration, leaving out sections that end up with nothing to say."""
-    narrator = _Narrator(book, config)
+def narrate_book(
+    book: Book, config: Config, guesser: LanguageGuesser | None = None
+) -> list[SectionNarration]:
+    """Every section's narration, leaving out sections that end up with nothing to say.
+    With a `guesser`, the language of text the book doesn't mark is guessed."""
+    narrator = _Narrator(book, config, guesser)
     narrations = []
     for number, section in enumerate(book.sections, start=1):
         read_earlier = set(narrator.read_notes)
@@ -99,7 +114,7 @@ def narrate_book(book: Book, config: Config) -> list[SectionNarration]:
 def narrate_title(book: Book, config: Config) -> SectionNarration:
     """A short opening track: the book's title, then who wrote it."""
     metadata = book.metadata
-    words = config["narration"]["words"]
+    words = narration_words(config, metadata.language)
     blocks: list[Block] = [Heading(1, metadata.title)]
     if metadata.authors:
         blocks.append(Paragraph(f"{words['by']} {_join(metadata.authors, words['and'])}."))
@@ -118,11 +133,32 @@ def _words(text: str) -> list[str]:
     return re.sub(r"[^\w\s]", "", text).casefold().split()
 
 
+def narration_words(config: Config, lang: str | None) -> dict[str, str]:
+    """The words narration adds, in `lang`: the most specific table for it under
+    [narration.words], or the English words when there is none."""
+    return _language_words(config, lang) or _english_words(config)
+
+
+def has_narration_words(config: Config, lang: str | None) -> bool:
+    """Whether [narration.words] has words in `lang`, English included."""
+    return same_language(lang, None) or _language_words(config, lang) is not None
+
+
+def _english_words(config: Config) -> dict[str, str]:
+    return {k: v for k, v in config["narration"]["words"].items() if isinstance(v, str)}
+
+
+def _language_words(config: Config, lang: str | None) -> dict[str, str] | None:
+    words = config["narration"]["words"]
+    return most_specific({k.lower(): v for k, v in words.items() if isinstance(v, dict)}, lang)
+
+
 class _Narrator:
-    def __init__(self, book: Book, config: Config) -> None:
+    def __init__(self, book: Book, config: Config, guesser: LanguageGuesser | None = None) -> None:
+        self.config = config
         self.settings = config["narration"]
         self.pauses = config["narration"]["pauses"]
-        self.words = config["narration"]["words"]
+        self.guesser = guesser
         self.speech = SpeechRules.from_config(config)
         self.sentences = SentenceRules.from_config(config)
         self.language = book.metadata.language
@@ -132,6 +168,8 @@ class _Narrator:
         self.read_notes: set[str] = set()
         self.title_level = _title_level(book)
         self._passages: list[Passage] = []
+        self._words: dict[str | None, dict[str, str]] = {}
+        self._section_marked = False  # a chapter marked in a language not the book's
 
     def has_content(
         self, utterances: list[Utterance], section: Section, read_earlier: set[str]
@@ -150,35 +188,74 @@ class _Narrator:
         return not (has_notes and all_notes_read) and any(u.spoken for u in utterances)
 
     def section(self, section: Section) -> tuple[list[Utterance], list[Passage]]:
-        out = [Utterance("", "", self.pauses["section_start_ms"])]
-        self._passages = []
         lang = section.lang or self.language
+        out = [Utterance("", "", self.pauses["section_start_ms"], lang)]
+        self._passages = []
+        self._section_marked = bool(section.lang) and not same_language(section.lang, self.language)
         top = _first_heading_level(section)
         if top is None:
             top = self.title_level
             self._add_heading(out, Heading(top, section.title), lang)
         end_notes: list[Footnote] = []
         for block in _heading_first(section.blocks):
-            self._block(out, block, block_lang(block, lang), end_notes)
+            self._block(out, block, lang, end_notes)
         if end_notes:
-            self._add_heading(out, Heading(min(top + 1, 6), self.words["notes"]), lang)
+            self._add_heading(out, Heading(min(top + 1, 6), self.words(lang)["notes"]), lang)
             for note in end_notes:
-                self._note(out, note, block_lang(note, lang))
+                self._note(out, note, lang)
         _extend_pause(out, self.pauses["section_end_ms"])
         return out, self._passages
 
-    def _block(self, out: list[Utterance], block, lang: str | None, end_notes: list) -> None:
+    def words(self, lang: str | None) -> dict[str, str]:
+        if lang not in self._words:
+            self._words[lang] = narration_words(self.config, lang)
+        return self._words[lang]
+
+    def _guessing(self, block: Block) -> bool:
+        """Whether the language of `block` is open to guessing: there is a guesser, and
+        the book marks no language on the block or its chapter."""
+        return (
+            self.guesser is not None
+            and not self._section_marked
+            and not isinstance(block, PageMarker | SceneBreak)
+            and not block.lang
+        )
+
+    def _guessed(self, block: Block, section_lang: str | None) -> tuple[Block, bool]:
+        """`block`, carrying the language its text is guessed to be in if that isn't the
+        section's; and whether its sentences are to be guessed one by one as well."""
+        if not self._guessing(block) or self.guesser is None:
+            return block, False
+        text = block_text(block)
+        sentences = isinstance(block, Paragraph | Footnote) and self.guesser.checks_sentences(text)
+        guess = self.guesser.guess(text)
+        if guess is None or same_language(guess, section_lang):
+            return block, sentences
+        log.info("Guessed that a passage is in %s: %s", guess, _preview(text))
+        return replace(block, lang=guess), sentences
+
+    def _block(
+        self, out: list[Utterance], block, section_lang: str | None, end_notes: list
+    ) -> None:
+        if isinstance(block, Footnote):
+            mode = self.settings["footnotes"]
+            if mode == "end_of_section":
+                end_notes.append(block)
+            elif mode != "skip" and block.note_id not in self.read_notes:
+                self._note(out, block, section_lang)
+            return
+        block, check = self._guessed(block, section_lang)
+        lang = block_lang(block, section_lang)
         match block:
             case Heading():
                 self._add_heading(out, block, lang)
             case Paragraph(text=text, note_refs=refs):
-                part = self._sentences(out, text, lang, self.pauses["paragraph_ms"])
+                part = self._sentences(out, text, lang, self.pauses["paragraph_ms"], check=check)
                 self._passages.append(Passage(block, (part,)))
                 if self.settings["footnotes"] == "after_paragraph":
                     for note_id in refs:
                         if note_id in self.notes and note_id not in self.read_notes:
-                            note = self.notes[note_id]
-                            self._note(out, note, block_lang(note, lang))
+                            self._note(out, self.notes[note_id], section_lang)
             case ListBlock(items=items, ordered=ordered):
                 parts = []
                 for n, item in enumerate(items, start=1):
@@ -193,16 +270,10 @@ class _Narrator:
                 self._table(out, block, lang)
             case Image():
                 self._image(out, block, lang)
-            case Footnote(note_id=note_id):
-                mode = self.settings["footnotes"]
-                if mode == "end_of_section":
-                    end_notes.append(block)
-                elif mode != "skip" and note_id not in self.read_notes:
-                    self._note(out, block, lang)
             case PageMarker(label=label):
                 part = range(len(out), len(out))
                 if self.settings["announce_pages"]:
-                    part = self._sentences(out, f"{self.words['page']} {label}.", lang, 0)
+                    part = self._sentences(out, f"{self.words(lang)['page']} {label}.", lang, 0)
                     _extend_pause(out, self.pauses["sentence_ms"])
                 self._passages.append(Passage(block, (part,)))
             case SceneBreak():
@@ -222,29 +293,46 @@ class _Narrator:
         spoken = normalize_heading(text, self.speech, lang)
         if not spoken.endswith(_ENDS_CLAUSE):
             spoken += "."  # so the voice closes the heading instead of trailing off
-        out.append(Utterance(text, spoken, self.pauses["heading_ms"]))
+        out.append(Utterance(text, spoken, self.pauses["heading_ms"], lang))
 
     def _sentences(
-        self, out: list[Utterance], text: str, lang: str | None, end_ms: int, prefix: str = ""
+        self,
+        out: list[Utterance],
+        text: str,
+        lang: str | None,
+        end_ms: int,
+        prefix: str = "",
+        check: bool = False,
     ) -> range:
-        """Add `text` sentence by sentence. `prefix` is said before the first, not shown."""
+        """Add `text` sentence by sentence. `prefix` is said before the first, not shown.
+        With `check`, each sentence's language is guessed too."""
         start = len(out)
         for n, sentence in enumerate(split_sentences(text, self.sentences)):
             said = prefix + sentence if n == 0 else sentence
-            spoken = normalize_for_speech(said, self.speech, lang)
-            out.append(Utterance(sentence, spoken, self.pauses["sentence_ms"]))
+            said_in = self._sentence_lang(sentence, lang) if check else lang
+            spoken = normalize_for_speech(said, self.speech, said_in)
+            out.append(Utterance(sentence, spoken, self.pauses["sentence_ms"], said_in))
         _extend_pause(out, end_ms)
         return range(start, len(out))
 
-    def _note(self, out: list[Utterance], note: Footnote, lang: str | None) -> None:
+    def _sentence_lang(self, sentence: str, lang: str | None) -> str | None:
+        """The sentence's own language, if it is guessed to be another than `lang`."""
+        guess = self.guesser.guess(sentence) if self.guesser else None
+        if guess is None or same_language(guess, lang):
+            return lang
+        log.info("Guessed that a sentence is in %s: %s", guess, _preview(sentence))
+        return guess
+
+    def _note(self, out: list[Utterance], note: Footnote, section_lang: str | None) -> None:
         self.read_notes.add(note.note_id)
-        part = self._sentences(
-            out, f"{self.words['note']}: {note.text}", lang, self.pauses["paragraph_ms"]
-        )
+        note, check = self._guessed(note, section_lang)
+        lang = block_lang(note, section_lang)
+        text = f"{self.words(lang)['note']}: {note.text}"
+        part = self._sentences(out, text, lang, self.pauses["paragraph_ms"], check=check)
         self._passages.append(Passage(note, (part,)))
 
     def _image(self, out: list[Utterance], image: Image, lang: str | None) -> None:
-        label = self.words["image"]
+        label = self.words(lang)["image"]
         start = len(out)
         description = caption = range(start, start)
         if image.alt:
@@ -260,20 +348,18 @@ class _Narrator:
             self._passages.append(Passage(image, (description, caption)))
 
     def _table(self, out: list[Utterance], table: Table, lang: str | None) -> None:
-        label = self.words["table"]
-        intro = f"{label}: {table.caption}" if table.caption else f"{label}."
+        words = self.words(lang)
+        intro = f"{words['table']}: {table.caption}" if table.caption else f"{words['table']}."
         start = len(out)
         self._sentences(out, _sentence(intro), lang, self.pauses["sentence_ms"])
         if self.settings["tables"] == "skip":
-            self._sentences(out, self.words["table_skipped"], lang, self.pauses["paragraph_ms"])
+            self._sentences(out, words["table_skipped"], lang, self.pauses["paragraph_ms"])
             self._passages.append(Passage(table, (range(start, len(out)),)))
             return
         parts = [range(start, len(out))]
         headers = table.rows[0] if table.header_rows else ()
         for n, row in enumerate(table.rows[table.header_rows :], start=1):
-            parts.append(
-                self._sentences(out, _row_text(self.words["row"], n, headers, row), lang, 0)
-            )
+            parts.append(self._sentences(out, _row_text(words["row"], n, headers, row), lang, 0))
             _extend_pause(out, self.pauses["list_item_ms"])
         _extend_pause(out, self.pauses["paragraph_ms"])
         self._passages.append(Passage(table, tuple(parts)))
@@ -324,6 +410,12 @@ def _row_text(row_word: str, n: int, headers: tuple[str, ...], row: tuple[str, .
         header = headers[i].strip() if i < len(headers) else ""
         cells.append(f"{header}: {cell}" if header and header != cell else cell)
     return _sentence(f"{row_word} {n}: " + "; ".join(cells))
+
+
+def _preview(text: str, length: int = 60) -> str:
+    """The start of `text`, for the log."""
+    text = " ".join(text.split())
+    return text if len(text) <= length else text[: length - 3] + "..."
 
 
 def _sentence(text: str) -> str:

@@ -73,14 +73,15 @@ def say_field(number: int) -> str:
     return f"say-{number}"
 
 
-def form_limits(limits: WordLimits) -> tuple[int, int]:
-    """The most bytes and fields a form listing every saved word can send: each word and
-    both spellings at their longest, every character percent-encoded (up to 9 bytes
-    each)."""
+def form_limits(limits: WordLimits, words: int | None = None) -> tuple[int, int]:
+    """The most bytes and fields a form listing `words` words (by default, as many as the
+    word list holds) can send: each word and both spellings at their longest, every
+    character percent-encoded (up to 9 bytes each)."""
+    words = limits.entries if words is None else words
     per_word = 9 * (limits.word_chars + 2 * limits.spelling_chars) + FIELDS_PER_WORD * len(
         "&word-12345="
     )
-    return limits.entries * per_word + 4096, FIELDS_PER_WORD * limits.entries + 16
+    return words * per_word + 4096, FIELDS_PER_WORD * words + 16
 
 
 def sent_words(fields: list[tuple[str, str]], most: int) -> list[SentWord]:

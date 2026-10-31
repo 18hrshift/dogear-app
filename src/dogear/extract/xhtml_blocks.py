@@ -181,7 +181,7 @@ class _Walker:
             notes = self._note(el, lang)
             if notes is not None:
                 return out + notes
-        level = _heading_level(el)
+        level = heading_level(el)
         if level:
             out += self._heading(el, lang, level)
         elif tag in ("p", "pre"):
@@ -491,7 +491,7 @@ def _tidy_scene_breaks(blocks: list[Block]) -> list[Block]:
     return out
 
 
-def _heading_level(el: etree._Element) -> int:
+def heading_level(el: etree._Element) -> int:
     """1-6 for a heading element (h1-h6 or role="heading"), else 0."""
     if _is_aria_heading(el):
         try:

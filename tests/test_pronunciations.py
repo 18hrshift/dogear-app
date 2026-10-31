@@ -190,3 +190,56 @@ def test_with_phonemes_keeps_only_phoneme_entries(example):
 
 def test_an_empty_dictionary_changes_nothing():
     assert PronunciationDictionary().say_sounds_like("Utterson's house.") == "Utterson's house."
+
+
+# Languages: spellings are for English text unless an entry says.
+
+
+LANGUAGES = """\
+[words]
+Utterson = "utter son"
+Mme = { sounds_like = "madame", languages = ["fr"] }
+Lanyon = { sounds_like = "lan yon", languages = ["en", "fr"] }
+"""
+
+
+def test_an_entry_can_say_which_languages_it_is_for(tmp_path):
+    path = write(tmp_path, LANGUAGES)
+    entries = {e.word: e for e in read_pronunciation_file(path)}
+    assert entries["Utterson"].languages == ("en",)
+    assert entries["Mme"] == Pronunciation("Mme", "madame", None, path, ("fr",))
+    assert entries["Lanyon"].languages == ("en", "fr")
+
+
+@pytest.mark.parametrize(
+    ("lang", "said"),
+    [
+        (None, "Utter son, Mme, Lan yon"),
+        ("en-GB", "Utter son, Mme, Lan yon"),
+        ("fr", "Utterson, Madame, Lan yon"),
+        ("fr-CA", "Utterson, Madame, Lan yon"),
+        ("de", "Utterson, Mme, Lanyon"),
+    ],
+)
+def test_each_language_gets_only_its_own_entries(tmp_path, lang, said):
+    dictionary = load_dictionary([write(tmp_path, LANGUAGES)])
+    assert dictionary.for_language(lang).say_sounds_like("Utterson, Mme, Lanyon") == said
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ('[words]\nMme = { sounds_like = "madame", languages = "fr" }\n', "isn't a list"),
+        ('[words]\nMme = { sounds_like = "madame", languages = [] }\n', "isn't a list"),
+        ('[words]\nMme = { sounds_like = "madame", languages = ["French"] }\n', "isn't a list"),
+        ('[words]\nMme = { sounds_like = "" }\n', "needs its sounds_like written"),
+        ('[words]\nMme = { sounds_like = "a", phonemes = "b" }\n', "has both sounds_like"),
+        ('[words]\nLanyon = { phonemes = "x", languages = ["fr"] }\n', "applies to English only"),
+    ],
+)
+def test_mistakes_in_languages_name_the_entry(tmp_path, text, message):
+    path = write(tmp_path, text)
+    with pytest.raises(PronunciationError) as err:
+        read_pronunciation_file(path)
+    assert message in err.value.message
+    assert str(path) in err.value.message

@@ -64,6 +64,20 @@ def download_lock(folder: Path, report: Report) -> Iterator[None]:
         lock.release()
 
 
+def ensure_downloaded(
+    files: list[RemoteFile], folder: Path, config: Config, report: Report
+) -> None:
+    """Make sure every one of `files` is on disk, downloading whatever isn't under the
+    lock on `folder` (the models folder), so two Dogears never download the same file at
+    once. When every file is there already, nothing is locked or written. This is what a
+    voice engine's `prepare` calls."""
+    if all(f.path.is_file() for f in files):
+        return
+    with download_lock(folder, report):
+        # Asked again inside: another Dogear may have downloaded them while this one waited.
+        ensure_files(files, config, report)
+
+
 def ensure_files(files: list[RemoteFile], config: Config, report: Report) -> None:
     """Download whichever of `files` aren't on disk yet. Call it holding `download_lock`
     when another Dogear could be downloading into the same folder."""
@@ -120,7 +134,8 @@ def _new_temporary(target: Path) -> tuple[int, Path]:
 
 
 def _fetch(remote: RemoteFile, out: BinaryIO, timeout: float, report: Report) -> None:
-    received, next_mark = 0, _REPORT_EVERY
+    received = 0
+    progress = Quarters(remote.path.name, remote.size, "downloaded", report)
     with urllib.request.urlopen(remote.url, timeout=timeout) as response:
         while chunk := response.read(_CHUNK):
             received += len(chunk)
@@ -130,17 +145,49 @@ def _fetch(remote: RemoteFile, out: BinaryIO, timeout: float, report: Report) ->
                     hint=f"Please report this at {ISSUES_URL}.",
                 )
             out.write(chunk)
-            if remote.size >= _REPORT_FROM and received >= next_mark * remote.size:
-                report(f"{remote.path.name}: {round(next_mark * 100)}% downloaded.")
-                next_mark += _REPORT_EVERY
+            progress.reached(received)
 
 
-def file_sha256(path: Path) -> str:
+class Quarters:
+    """A progress line at each quarter of a big file, such as "model.onnx: 25% checked."
+    Files smaller than _REPORT_FROM get none."""
+
+    def __init__(self, name: str, size: int, done: str, report: Report) -> None:
+        self._name, self._size, self._done, self._report = name, size, done, report
+        self._next = _REPORT_EVERY
+
+    def reached(self, count: int) -> None:
+        """`count` bytes of the file are done."""
+        if self._size < _REPORT_FROM:
+            return
+        while self._next <= 1 and count >= self._next * self._size:
+            self._report(f"{self._name}: {round(self._next * 100)}% {self._done}.")
+            self._next += _REPORT_EVERY
+
+
+def file_sha256(path: Path, report: Report | None = None) -> str:
+    """The file's SHA-256. With `report`, a big file says how far it has got (Quarters)."""
     digest = hashlib.sha256()
+    progress = Quarters(path.name, path.stat().st_size, "checked", report) if report else None
+    done = 0
     with path.open("rb") as f:
         while chunk := f.read(_CHUNK):
             digest.update(chunk)
+            done += len(chunk)
+            if progress:
+                progress.reached(done)
     return digest.hexdigest()
+
+
+def folder_sha256(folder: Path) -> str:
+    """One SHA-256 for a folder of files, such as an unpacked model: of a line per file,
+    "<the file's SHA-256>  <its path in the folder, with />", sorted by path, the way
+    `sha256sum` writes them. A file added, removed, renamed, or changed changes it."""
+    files = sorted(
+        (path.relative_to(folder).as_posix(), path) for path in folder.rglob("*") if path.is_file()
+    )
+    lines = "".join(f"{file_sha256(path)}  {relative}\n" for relative, path in files)
+    return hashlib.sha256(lines.encode("utf-8")).hexdigest()
 
 
 def remove_stale_temporaries(folder: Path) -> None:

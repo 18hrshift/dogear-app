@@ -104,7 +104,7 @@ def finish(process: subprocess.Popen) -> str:
 PREPARE_SPACY = """
 import json, sys
 from dogear.config import default_config
-from dogear.voice import prepare_spacy
+from dogear.voice.kokoro_plugin import prepare_spacy
 
 catalog_module = sys.modules["dogear.voice.catalog"]
 pinned = catalog_module.catalog()

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from dogear.errors import PronunciationError
+from dogear.errors import PronunciationError, VoiceError
 from dogear.pronunciations import PronunciationDictionary
 from dogear.voice.engine import SpeechPlan
 
@@ -33,6 +33,10 @@ _LOOKALIKES = {
     "a lighter stress, not with an apostrophe",
 }
 PHONEMES_GUIDE = "https://github.com/hexgrad/misaki/blob/main/EN_PHONES.md"
+CHECK_FILES = (
+    "Run `dogear download --check`. It checks every voice file and downloads the damaged "
+    "ones again."
+)
 
 
 class KokoroEngine:
@@ -50,19 +54,30 @@ class KokoroEngine:
         identity: str,
     ) -> None:
         import onnxruntime  # slow to import, so only when a voice is actually needed
+        from onnxruntime.capi.onnxruntime_pybind11_state import InvalidGraph, InvalidProtobuf
 
         self.sample_rate = sample_rate
         self._g2p = g2p
         self._speed = speed
         self._max_phonemes = max_phonemes
         self._vocab = load_vocab(tokenizer)
+        row_bytes = _STYLE_WIDTH * np.dtype(np.float32).itemsize
+        size = voice.stat().st_size
+        if size == 0 or size % row_bytes:
+            raise damaged(voice, "it isn't the size a voice file is")
         self._styles = np.fromfile(voice, dtype=np.float32).reshape(-1, 1, _STYLE_WIDTH)
         options = onnxruntime.SessionOptions()
         options.intra_op_num_threads = threads
         options.log_severity_level = 3  # errors only
-        self._session = onnxruntime.InferenceSession(
-            str(model), options, providers=["CPUExecutionProvider"]
-        )
+        try:
+            self._session = onnxruntime.InferenceSession(
+                str(model), options, providers=["CPUExecutionProvider"]
+            )
+        # A damaged model fails to parse, as a protobuf or as a graph, or its text parts
+        # turn out not to be UTF-8.
+        except (InvalidProtobuf, InvalidGraph, UnicodeDecodeError) as e:
+            log.info("onnxruntime: %s", e)
+            raise damaged(model, "onnxruntime couldn't load it") from None
         self._identity = f"{identity}|speed={speed}"
 
     def plan(self, text: str) -> SpeechPlan:
@@ -92,8 +107,18 @@ class KokoroEngine:
 
 def load_vocab(tokenizer: Path) -> dict[str, int]:
     """Phoneme to token id, from the model's tokenizer.json."""
-    data = json.loads(tokenizer.read_text(encoding="utf-8"))
-    return {symbol: int(i) for symbol, i in data["model"]["vocab"].items()}
+    try:
+        data = json.loads(tokenizer.read_text(encoding="utf-8"))
+        return {symbol: int(i) for symbol, i in data["model"]["vocab"].items()}
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise damaged(tokenizer, f"it isn't the tokenizer Kokoro has ({e})") from None
+
+
+def damaged(path: Path, why: str) -> VoiceError:
+    """The error for a voice file that is there but can't be used: most likely damaged."""
+    return VoiceError(
+        f"The voice can't use {path}: {why}. The file may be damaged.", hint=CHECK_FILES
+    )
 
 
 def check_phonemes(dictionary: PronunciationDictionary, vocab: dict[str, int]) -> None:

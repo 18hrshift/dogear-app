@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from importlib import resources
@@ -32,6 +33,7 @@ from dogear.output.epub3_xhtml import STYLESHEET
 from dogear.output.epub3_xhtml import serialize as serialize_xhtml
 from dogear.output.language_tag import language_tag
 from dogear.readalong.model import SectionText
+from dogear.voice.engines import ChosenVoice
 
 log = logging.getLogger(__name__)
 
@@ -47,9 +49,14 @@ _IMAGE_TYPES = {".jpg": "image/jpeg", ".png": "image/png"}
 
 
 def build_epub3(
-    sections: list[SectionText], metadata: Metadata, path: Path, config: Config
+    sections: list[SectionText],
+    metadata: Metadata,
+    path: Path,
+    config: Config,
+    voices: Sequence[ChosenVoice] = (),
 ) -> None:
-    """Write the talking book to `path`, a .epub file.
+    """Write the talking book to `path`, a .epub file. `voices` read it, the main voice
+    first (none: the configured voice alone), and are named as its narrators.
 
     `sections` come from `readalong.build_readalong`, in reading order, with their audio
     already encoded by `talking_audio` (each `section.audio.path` is the MP3 to put in
@@ -75,7 +82,7 @@ def build_epub3(
             suffix = cover.path.suffix
             href, media_type = f"cover{suffix}", _IMAGE_TYPES[suffix]
             book.add(Item("cover-image", href, media_type, properties="cover-image"), cover.path)
-        voice = narrator(config)
+        voice = narrator(config, voices)
         package = Package(
             identifier=book_uid(metadata),
             title=metadata.title.strip() or sections[0].title,

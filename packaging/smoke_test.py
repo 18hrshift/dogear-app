@@ -67,6 +67,10 @@ def smoke_test(program: Path, scratch: Path) -> None:
     check(version.startswith("dogear "), version)
     voices = run(program, ["voices"], env)
     check("This is the one Dogear uses now." in voices, voices)
+    # Kokoro, found through Dogear's own entry points, and no other engine: a plugin
+    # installed where the build ran must not have come along.
+    engines = re.findall(r"^(\w+), licensed ", voices, flags=re.MULTILINE)
+    check(engines == ["Kokoro"], f"the build has the voice engines {engines}:\n{voices}")
     hello = out / "hello.wav"
     run(program, ["say", "Hello there.", "-o", str(hello)], env)
     check(hello.is_file() and hello.stat().st_size > 10_000, "say made no audio")

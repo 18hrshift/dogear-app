@@ -14,9 +14,10 @@ Dogear is installed it works without an internet connection.
 - **Check the listener's library first.** Libraries for print-disabled readers (such as
   Bookshare, or your country's library service for the blind) may already have the book,
   read by a person, at no cost. Dogear is for books they don't have.
-- **A book you have the right to convert,** as an EPUB, PDF, MOBI, or AZW3 file. Books
-  bought from some stores are copy-protected (DRM), and Dogear can't read those. Free
-  public-domain books from Standard Ebooks or Project Gutenberg work well.
+- **A book you have the right to convert,** as an EPUB, PDF, Word (DOCX), HTML, Markdown,
+  MOBI, or AZW3 file. Books bought from some stores are copy-protected (DRM), and Dogear
+  can't read those. Free public-domain books from Standard Ebooks or Project Gutenberg
+  work well.
 - **A computer:** Windows (64-bit), a Mac with Apple silicon and macOS 14 or newer, or a
   64-bit Linux PC, with about 1 GB of free space for Dogear and more for the books you
   make (see "Disk space" below).
@@ -65,9 +66,14 @@ device, please tell us (see "Getting help" below).
 
 1. **Add the book.** On Dogear's page, under "Add a book", choose the book file and
    choose "Upload the book". Dogear reads it to find its chapters. This usually takes
-   less than a minute.
+   less than a minute. A scanned PDF takes longer, a few seconds a page, because Dogear
+   first reads the words in the pictures of its pages (this is called OCR). The book's
+   page says how far it has got and about how long is left. "Stop reading this book"
+   stops it, and "Read again" carries on with the pages it hasn't read yet.
 2. **Choose what to make.** Check one or more kinds of book. Choose a voice: the list
-   starts with the best rated. Choose a speed: "a little slower" suits most listeners,
+   starts with the best rated. If someone has added more voices (such as Piper's: see
+   Dogear's README), each set is grouped under its engine's name, such as "Kokoro
+   voices". Choose a speed: "a little slower" suits most listeners,
    and players can change the speed later. Then choose which sections to read; all of
    them are checked to start with.
 3. **Try a short piece first.** For your first book, check only one or two short
@@ -104,7 +110,8 @@ off part way.
 
 Besides the books themselves, Dogear keeps every sentence it has spoken, so that it can
 carry on after a stop and remake a book quickly with other choices. That takes about
-170 MB for each hour of audio, so a long book can leave a few gigabytes behind. Once the
+170 MB for each hour of audio, so a long book can leave a few gigabytes behind. The words
+Dogear read from scanned PDFs are kept there too, which takes little space. Once the
 listener has the book, it is safe to delete. It is in a folder named `dogear`:
 
 - Windows: `%LOCALAPPDATA%\dogear\Cache` (paste that into File Explorer's address bar).
@@ -113,6 +120,11 @@ listener has the book, it is safe to delete. It is in a folder named `dogear`:
 
 To delete a book Dogear made, along with the file you uploaded, use "Delete this book" on
 its page.
+
+Before it starts on a book, Dogear checks that the computer has room for it. If it
+doesn't, the book's page says how much space the book needs and how much is free. Free up
+some space (the folder above is safe to empty), or choose fewer sections or kinds of book,
+then start it again.
 
 ## Using Dogear from a phone or tablet
 
@@ -137,23 +149,48 @@ Dogear says what went wrong and what to do next. The most common problems:
 
 - **"protected by DRM":** the book is copy-protected. Look for a DRM-free copy, or ask the
   listener's library for the book.
-- **"probably scanned page images":** the PDF is photos of pages, with no text Dogear can
-  read. Making it readable (OCR) needs a terminal for now: the README's "Check a book
-  before making it" section covers `dogear ocr`.
+- **"This PDF is scanned, and reading it needs Tesseract OCR":** the PDF is photos of
+  pages. Dogear can read the words in them (OCR) with a free program, Tesseract, which
+  Dogear's installers don't include. Install it, then choose "Read again" on the book's
+  page. On Windows, get the installer from
+  <https://github.com/UB-Mannheim/tesseract/wiki> and keep the folder it suggests, so
+  Dogear finds it. On a Mac with Homebrew, run `brew install tesseract`; on Ubuntu or
+  Debian, `sudo apt install tesseract-ocr`. (The Docker image has it already.)
+- **"probably scanned page images":** the PDF is photos of pages, and reading them with
+  OCR is turned off in Dogear's settings (`auto_ocr = false`). Set it back to `true`, or
+  remove that line, then choose "Read again".
+- **"found almost no text":** Dogear read a scanned PDF with OCR but found next to no
+  words. Check the scan in a PDF reader: the pages should be sharp, printed text the right
+  way up.
 - **A Kindle book (MOBI or AZW3) won't open:** Dogear needs the free program Calibre to
   read Kindle books. Install it from calibre-ebook.com, then try again.
-- **"Dogear's voice speaks only English":** the book is marked as being in another
-  language. If it really is in English (books are sometimes marked wrongly), check "Read
-  it as English". Dogear's voice can't read other languages yet.
+- **A Word document comes out as one long section:** Dogear starts a section at each
+  heading, and Word marks headings with its Heading styles. In Word, give each chapter's
+  title the Heading 1 style (on the Home tab, under Styles), save, and upload it again.
+  The same goes for HTML and Markdown files: each chapter needs a heading.
+- **"None of Dogear's voices speaks this book's language":** the book is marked as
+  being in another language, and the voices that come with Dogear speak English only.
+  If it really is in English (books are sometimes marked wrongly), check "Read it as
+  English". Voices in French, German, and Spanish come with the Piper plugin, for Dogear
+  installed with Python (the README says how). With one installed, "Choose what to make"
+  lists the voices for the book's language first and picks the best of them.
+- **"The voice you chose doesn't speak" the book's language:** choose one of the voices
+  listed first, under "Voices for this book's language", or check "Read it as English"
+  if the book is really in English.
 - **A name or word is said wrong:** on the book's page (or on "Choose what to make",
   before making it), follow "check how words are said". Dogear lists the words the voice
-  doesn't know, most frequent first; they are usually names. Choose Listen beside a word
+  doesn't know, most frequent first; they are usually names. It shows the 50 that come up
+  most, and "Show all" lists the rest. The list stays with the book, even after Dogear is
+  closed and started again. Choose Listen beside a word
   to hear it. If it sounds wrong, type how it sounds in "Say it like", using ordinary
   words or parts of words (Utterson as "utter son"), choose Save, and Listen again. Then
   make the book again: only the sentences with those words are spoken again. Your
   spellings are used for every book, and the Pronunciations page, in the list at the top
   of every page, lets you change or remove them, add a word, and listen to any short
   text.
+- **"The file may be damaged":** one of the voice's files on the computer is damaged.
+  Reinstalling Dogear fixes it. Or, in a terminal, `dogear download --check` checks every
+  voice file and downloads the damaged ones again (it needs the internet).
 - **"This page needs Dogear's access link":** open the link shown in Dogear's window,
   which logs this browser in. It looks like `http://127.0.0.1:8765/start?key=...`.
 - **"Port 8765 is in use already":** Dogear is probably running in another window. Use

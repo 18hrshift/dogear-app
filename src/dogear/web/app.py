@@ -76,6 +76,8 @@ def create_app(
         Route(BOOK + "/files/{number:int}", book_pages.download),
         Route(BOOK + "/words", word_pages.words_page),
         Route(BOOK + "/words", word_pages.save_words, methods=["POST"]),
+        Route(BOOK + "/words/all", word_pages.all_words_page),
+        Route(BOOK + "/words/all", word_pages.save_all_words, methods=["POST"]),
         Route(BOOK + "/words/check", word_pages.start_check, methods=["POST"]),
         Route(BOOK + "/words/status", word_pages.words_status),
         Route("/pronunciations", pronunciation_pages.pronunciations_page),

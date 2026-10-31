@@ -24,7 +24,7 @@
 {% block main %}{% endblock %}
 </main>
 <footer class="site-footer">
-  <p>Dogear runs on the computer where it was started. Your books, and everything made from them, stay on that computer.</p>
+  <p>Dogear runs on the computer where it was started. Your books, and everything made from them, stay on that computer{% if cloud_allowed %}, except the text of a book made with a voice marked "sends the book's text", which goes to the computer named{% endif %}.</p>
 </footer>
 </body>
 </html>

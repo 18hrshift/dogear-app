@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from dogear.pronunciations import Pronunciation
+from dogear.pronunciations import DEFAULT_LANGUAGES, Pronunciation
 
 _ESCAPES = {
     '"': '\\"',
@@ -31,6 +31,11 @@ def pronunciation_file_text(entries: Iterable[Pronunciation], comment: str = "")
     for entry in entries:
         if entry.phonemes is not None:
             value = f"{{ phonemes = {toml_string(entry.phonemes)} }}"
+        elif entry.sounds_like is not None and entry.languages != DEFAULT_LANGUAGES:
+            languages = ", ".join(toml_string(tag) for tag in entry.languages)
+            value = (
+                f"{{ sounds_like = {toml_string(entry.sounds_like)}, languages = [{languages}] }}"
+            )
         elif entry.sounds_like is not None:
             value = toml_string(entry.sounds_like)
         else:

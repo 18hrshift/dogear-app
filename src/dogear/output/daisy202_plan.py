@@ -11,6 +11,7 @@ for each field the spec makes mandatory even when the source book doesn't say.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from dogear import __version__
@@ -20,14 +21,15 @@ from dogear.output.book_identity import book_uid, narrator
 from dogear.output.daisy202_clock import clip_bounds
 from dogear.output.daisy202_xhtml import language_tag
 from dogear.readalong.model import HeadingText, SectionText
+from dogear.voice.engines import ChosenVoice
 
 NCC = "ncc.html"
 
 # DAISY 2.02 makes dc:creator and dc:publisher mandatory; when the book names none, the
 # NCC says so rather than inventing one.
 UNKNOWN = "Unknown"
-# Dogear's voice speaks only English so far (`make.check_language` refuses other
-# books), so the audio of a book with no language tag is English.
+# A book with no language tag is read as English, unless the main voice speaks another
+# language, and then `make.settle_language` gives the book that voice's language.
 SPOKEN_LANGUAGE = "en"
 
 
@@ -70,7 +72,12 @@ class BookPlan:
         return [name for s in self.sections for name in (s.smil, s.text, s.audio)] + [NCC]
 
 
-def plan_book(sections: list[SectionText], metadata: Metadata, config: Config) -> BookPlan:
+def plan_book(
+    sections: list[SectionText],
+    metadata: Metadata,
+    config: Config,
+    voices: Sequence[ChosenVoice] = (),
+) -> BookPlan:
     if not sections:
         raise ValueError("A talking book needs at least one section.")
     language = language_tag(metadata.language, "the book") or SPOKEN_LANGUAGE
@@ -101,7 +108,7 @@ def plan_book(sections: list[SectionText], metadata: Metadata, config: Config) -
         publisher=(metadata.publisher or "").strip() or UNKNOWN,
         source=(metadata.identifier or "").strip() or None,
         language=language,
-        narrator=narrator(config),
+        narrator=narrator(config, voices),
         generator=f"Dogear {__version__}",
         sections=tuple(plans),
     )

@@ -9,16 +9,22 @@ import pytest
 from kokoro_fakes import use_fake_session, write_tokenizer, write_voice
 
 from dogear.errors import PronunciationError, ToolNotFoundError, VoiceError
-from dogear.voice import _check_engine, find_voice, make_engine, prepare_kokoro, prepare_spacy
 from dogear.voice import downloads as downloads_module
 from dogear.voice import g2p as g2p_module
+from dogear.voice import make_engine, prepare_voice
 from dogear.voice.catalog import (
     catalog,
+    downloaded_kokoro_file,
+    downloaded_spacy_model_dir,
     kokoro_file,
+    kokoro_files,
+    kokoro_voice,
     kokoro_voices,
     spacy_model_dir,
     spacy_wheel,
 )
+from dogear.voice.engines import configured_voice
+from dogear.voice.kokoro_plugin import prepare_kokoro, prepare_spacy
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -61,15 +67,16 @@ def test_kokoro_files_come_from_one_pinned_revision():
 
 
 def test_default_voice_is_in_the_catalog(config):
-    assert find_voice(config["voice"]["voice"]).name == config["voice"]["voice"]
+    assert kokoro_voice(config["voice"]["voice"]).name == config["voice"]["voice"]
 
 
 def test_default_model_build_is_in_the_catalog(config):
     assert config["kokoro"]["model"] in catalog()["kokoro"]["models"]
 
 
-def test_default_engine_is_known(config):
-    _check_engine(config)
+def test_default_voice_is_a_kokoro_voice(config):
+    chosen = configured_voice(config)
+    assert (chosen.engine.name, chosen.voice.name) == ("kokoro", config["voice"]["voice"])
 
 
 def test_kokoro_file_locations(tmp_path):
@@ -144,19 +151,19 @@ def fake_downloads(monkeypatch):
             else:
                 remote.path.write_bytes(b"stand-in")
 
-    monkeypatch.setattr("dogear.voice.ensure_files", fake_ensure_files)
+    monkeypatch.setattr("dogear.voice.kokoro_plugin.ensure_files", fake_ensure_files)
     return requested
 
 
-def test_find_voice():
-    voice = find_voice("bf_emma")
+def test_kokoro_voice():
+    voice = kokoro_voice("bf_emma")
     assert (voice.name, voice.accent, voice.british) == ("bf_emma", "British", True)
-    assert not find_voice("af_heart").british
+    assert not kokoro_voice("af_heart").british
 
 
 def test_unknown_voice_has_a_hint():
     with pytest.raises(VoiceError, match="no voice called 'af_nobody'") as err:
-        find_voice("af_nobody")
+        kokoro_voice("af_nobody")
     assert "dogear voices" in err.value.hint
 
 
@@ -173,7 +180,7 @@ def test_bad_voice_settings_fail_before_any_download(
 ):
     config[section][key] = value
     with pytest.raises(VoiceError, match=message) as err:
-        prepare_kokoro(config, print)
+        prepare_voice(config, print)
     assert hint in err.value.hint
     assert fake_downloads == []
 
@@ -417,3 +424,28 @@ def test_prepare_spacy_downloads_only_the_spacy_model(config, models, fake_downl
     assert fake_downloads == [["en_core_web_sm-3.8.0-py3-none-any.whl"]]
     assert prepare_spacy(config, print) == folder
     assert len(fake_downloads) == 1  # nothing more to fetch
+
+
+def test_spacys_unpacked_model_is_pinned_too():
+    assert SHA256.fullmatch(catalog()["spacy"]["model_sha256"])
+
+
+def test_kokoro_files_lists_every_build_the_tokenizer_and_every_voice():
+    kokoro = catalog()["kokoro"]
+    listed = kokoro_files()
+    assert [name for kind, name in listed if kind == "model"] == list(kokoro["models"])
+    assert ("tokenizer", "") in listed
+    assert [name for kind, name in listed if kind == "voice"] == list(kokoro["voices"])
+
+
+def test_downloaded_files_are_never_the_bundled_copies(tmp_path, standalone_build):
+    voice = catalog()["kokoro"]["voices"]["af_heart"]["sha256"]
+    bundled = standalone_build.add_model("kokoro/voices/af_heart.bin", voice)
+    assert kokoro_file("voice", "af_heart", tmp_path).path == bundled
+    downloaded = downloaded_kokoro_file("voice", "af_heart", tmp_path)
+    assert downloaded.path == tmp_path / "kokoro" / "voices" / "af_heart.bin"
+    folder = standalone_build.add_model_folder(
+        "spacy/en_core_web_sm-3.8.0", catalog()["spacy"]["sha256"]
+    )
+    assert spacy_model_dir(tmp_path) == folder
+    assert downloaded_spacy_model_dir(tmp_path) == tmp_path / "spacy" / "en_core_web_sm-3.8.0"

@@ -13,7 +13,9 @@ import os
 import subprocess
 import sys
 import threading
-from collections.abc import Iterator
+import time
+from collections import deque
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
@@ -28,6 +30,9 @@ UTF8_OUTPUT_ENV = "DOGEAR_UTF8_OUTPUT"
 STOP_GRACE_SECONDS = 10.0
 # Longest output line kept. Longer lines are cut (a traceback can hold a whole sentence).
 MAX_LINE_CHARS = 2000
+# The last lines of a captured child's stderr that are kept, for its `Error:` lines.
+MAX_STDERR_LINES = 200
+WAIT_POLL_SECONDS = 1.0  # how often a captured child's silence is checked
 
 
 def dogear_command() -> list[str]:
@@ -145,27 +150,37 @@ def read_lines(stream: IO[bytes]) -> Iterator[str]:
 class Captured:
     returncode: int
     stdout: bytes
-    stderr: str
+    stderr: str  # its last MAX_STDERR_LINES lines, where `Error:` and `What to do:` are
     too_long: bool  # stdout went past its limit, so `stdout` is incomplete
     timed_out: bool
 
 
 def run_captured(
-    command: list[str], *, timeout: float, max_stdout: int, stopper: Stopper | None = None
+    command: list[str],
+    *,
+    timeout: float,
+    max_stdout: int,
+    stopper: Stopper | None = None,
+    on_line: Callable[[str], None] | None = None,
 ) -> Captured:
-    """Run a child to the end, keeping at most `max_stdout` bytes of its stdout."""
+    """Run a child to the end, keeping at most `max_stdout` bytes of its stdout. Each line
+    it writes to stderr goes to `on_line`, if given, as it comes.
+
+    The child is stopped once it has gone `timeout` seconds without writing a line to
+    stderr, where `dogear` reports how it's going: one that has said nothing for that
+    long is taken to be stuck. A long job that keeps reporting, such as reading a long
+    scanned PDF with OCR, runs for as long as it needs."""
     child = Child(command, stderr=subprocess.PIPE)
     process = child.process
     if stopper is not None:
         stopper.attach(child)
     out = _Collector(process.stdout, max_stdout)
-    err = _Collector(process.stderr, 64 * 1024)
+    err = _LineReader(process.stderr, on_line)
     timed_out = False
     try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        child.end()
+        timed_out = not _wait_while_heard(process, err, timeout)
+        if timed_out:
+            child.end()
     except BaseException:
         child.end()
         raise
@@ -178,10 +193,58 @@ def run_captured(
     return Captured(
         returncode=process.returncode,
         stdout=out.data(),
-        stderr=err.data().decode("utf-8", errors="replace"),
+        stderr=err.text(),
         too_long=out.overflowed,
         timed_out=timed_out,
     )
+
+
+def _wait_while_heard(process: subprocess.Popen, err: _LineReader, timeout: float) -> bool:
+    """Wait for the child to end. False if it went `timeout` seconds without a line first."""
+    while True:
+        left = err.heard_at + timeout - time.monotonic()
+        if left <= 0:
+            return False
+        try:
+            process.wait(timeout=min(left, WAIT_POLL_SECONDS))
+            return True
+        except subprocess.TimeoutExpired:
+            continue
+
+
+class _LineReader:
+    """Reads a child's stderr line by line on a thread, keeping the last lines and when
+    the latest came, and handing each to `on_line`. If `on_line` fails (a bug), the rest
+    is still read, so the child never waits on a full pipe, and `join` raises the error."""
+
+    def __init__(self, stream: IO[bytes] | None, on_line: Callable[[str], None] | None) -> None:
+        self._lines: deque[str] = deque(maxlen=MAX_STDERR_LINES)
+        self._on_line = on_line
+        self._error: Exception | None = None
+        self.heard_at = time.monotonic()
+        self._thread = threading.Thread(target=self._read, args=(stream,), daemon=True)
+        self._thread.start()
+
+    def _read(self, stream: IO[bytes] | None) -> None:
+        if stream is None:
+            return
+        with stream:
+            for line in read_lines(stream):
+                self.heard_at = time.monotonic()
+                self._lines.append(line)
+                if self._on_line is not None and self._error is None:
+                    try:
+                        self._on_line(line)
+                    except Exception as e:
+                        self._error = e
+
+    def join(self) -> None:
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+
+    def text(self) -> str:
+        return "\n".join(self._lines)
 
 
 class _Collector:

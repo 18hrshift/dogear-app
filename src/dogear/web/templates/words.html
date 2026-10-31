@@ -13,7 +13,7 @@
 {% if check is none %}
 <p>Dogear can list the words in {{ where }} that the voice doesn't know, most frequent first. They are usually names. The voice guesses how to say them, and sometimes gets one wrong. You can then listen to each word, and fix the ones that sound wrong.</p>
 {% if needs_english %}
-<p>This book says it is in the language with the code "{{ language }}". Dogear's voice speaks only English. Books are sometimes marked with the wrong language, so if this one is in English, check its words as English.</p>
+<p>This book says it is in the language with the code "{{ language }}". The word check finds the words a Kokoro voice doesn't know in English text. Books are sometimes marked with the wrong language, so if this one is in English, check its words as English.</p>
 {% endif %}
 <form method="post" action="/books/{{ book_id }}/words/check">
   {% if needs_english %}<input type="hidden" name="english" value="yes">{% endif %}
@@ -24,7 +24,7 @@
   <p id="status" class="status" role="status">{{ status.sentence }}</p>
 </div>
 {% if watching %}
-<p><a id="check-progress" href="/books/{{ book_id }}/words">Check progress</a></p>
+<p><a id="check-progress" href="{{ page }}">Check progress</a></p>
 {% endif %}
 {% endif %}
 
@@ -44,14 +44,19 @@
 {% if more %}
 <p>{{ more }} more {{ "word isn't" if more == 1 else "words aren't" }} listed. Each comes up {{ fewest }} {{ "time" if fewest == 1 else "times" }} or fewer.</p>
 {% endif %}
-<form method="post" action="/books/{{ book_id }}/words" novalidate>
+{% if rest %}
+<p><a href="{{ others }}">{% if rest_is_all %}Show all {{ rest }} words{% else %}Show the {{ rest }} most frequent words{% endif %}</a></p>
+{% elif every and items|length > shown %}
+<p><a href="{{ others }}">Show only the {{ shown }} most frequent words</a></p>
+{% endif %}
+<form method="post" action="{{ page }}" novalidate>
   {% for item in items %}
   {{ word_group(item, errors) }}
   {% endfor %}
   <button type="submit">Save</button>
 </form>
 {% for item in items %}
-{{ listen_form(item, back, book_id) }}
+{{ listen_form(item, page, book_id) }}
 {% endfor %}
 {% elif check and check.state == "done" %}
 <p>The voice knows every word in {{ where }}, so there's nothing to fix.</p>

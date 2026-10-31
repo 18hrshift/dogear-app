@@ -37,7 +37,7 @@ class BookSummary:
     title: str
     authors: tuple[str, ...]
     language: str | None
-    source_format: str  # the file's extension: "epub", "pdf", "mobi", "azw3", or "azw"
+    source_format: str  # the file's extension without the dot: "epub", "docx", "md"...
     words: int
     sections: tuple[SectionSummary, ...]
 

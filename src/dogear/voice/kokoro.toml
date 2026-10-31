@@ -1,0 +1,8 @@
+# Default settings for the Kokoro voice engine, the [kokoro] table. Dogear adds them to
+# its own defaults (defaults.toml), and a settings file can change them like any other.
+
+# Which build of the Kokoro model to use. "full" (325 MB) sounds best. "quantized" (92 MB)
+# rendered about 25% faster on a test laptop CPU, at slightly lower quality.
+model = "full"
+# CPU threads to use while speaking. 0 means all of them.
+threads = 0

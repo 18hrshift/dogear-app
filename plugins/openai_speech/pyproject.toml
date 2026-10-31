@@ -1,0 +1,38 @@
+[project]
+name = "dogear-openai-speech"
+version = "0.1.0"
+description = "Voices from OpenAI-compatible speech services for Dogear, the open talking-book maker."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Dogear contributors" }]
+keywords = ["accessibility", "audiobook", "text-to-speech", "openai", "dogear"]
+# Dogear itself isn't listed: install this into the same environment as Dogear, as the
+# README says. The name "dogear" on PyPI belongs to an unrelated tool, so listing it
+# could install that instead. HTTP is Python's own urllib: nothing else is needed.
+dependencies = [
+    "numpy>=1.26",  # BSD-3-Clause: audio samples
+]
+
+[project.urls]
+Homepage = "https://github.com/18hrshift/dogear-app/tree/main/plugins/openai_speech"
+Issues = "https://github.com/18hrshift/dogear-app/issues"
+
+# How Dogear finds the engine: see docs/voice-engines.md in Dogear.
+[project.entry-points."dogear.engines"]
+openai_speech = "dogear_openai_speech.plugin:ENGINE"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dogear_openai_speech"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+extend = "../../pyproject.toml"

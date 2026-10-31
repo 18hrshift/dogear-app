@@ -22,6 +22,7 @@ from dogear.document import (
     Section,
     Table,
 )
+from dogear.language_detection import DetectionSettings, LanguageGuesser
 from dogear.output import epub3
 from dogear.output.book_identity import book_uid, narrator
 from dogear.output.epub3 import ACTIVE_CLASS, build_epub3
@@ -246,6 +247,38 @@ def test_text_shows_each_kind_of_block(config, tmp_path):
     assert not find("//x:img") and figure.get("class") == "image"
     [french] = find("//x:p[@lang='fr']")
     assert french.get(XML_LANG) == "fr"
+
+
+MIXED = Section(
+    "Three",
+    blocks=[
+        Heading(1, "Three"),
+        Paragraph(
+            "The old lady put her cup down on the table and looked out of the window. "
+            "Then she said: La vieille dame posa sa tasse sur la table et regarda par la "
+            "fenêtre. And she smiled at the rain falling on the garden for a long while."
+        ),
+        Paragraph("Le lendemain matin, nous partîmes de bonne heure pour la gare."),
+    ],
+)
+
+
+def test_languages_found_by_detection_are_marked_in_the_text(config, tmp_path):
+    settings = DetectionSettings.from_config(config)
+    guesser = LanguageGuesser(replace(settings, sentence_check_min_letters=100), {"en", "fr"})
+    built, book_metadata = talking_book(config, tmp_path, MIXED, title_track=False, guesser=guesser)
+    path = tmp_path / "out" / "book.epub"
+    build_epub3(built, book_metadata, path, config)
+    book = Epub(path)
+    doc = body_docs(book)[0]
+    first, second = book.xpath(doc, "//x:body/x:p")
+    # A French sentence in an English paragraph is marked on its own span...
+    spans = book.xpath(first, "x:span")
+    assert [s.get("lang") for s in spans] == [None, "fr", None]
+    assert spans[1].get(XML_LANG) == "fr"
+    # ...and a French paragraph as a whole, its sentences inheriting it.
+    assert second.get("lang") == "fr" and second.get(XML_LANG) == "fr"
+    assert [s.get("lang") for s in book.xpath(second, "x:span")] == [None]
 
 
 def test_a_header_row_with_nothing_under_it_is_an_ordinary_row(config, tmp_path):

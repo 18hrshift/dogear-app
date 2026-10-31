@@ -31,6 +31,10 @@ dependencies = [
     "uvicorn>=0.34",
     "jinja2>=3.1",
     "python-multipart>=0.0.20",
+    "markdown-it-py>=3",     # MIT: Markdown to HTML
+    "mdit-py-plugins>=0.4",  # MIT: Markdown footnotes and front matter
+    "pyyaml>=6",             # MIT: Markdown front matter, read with BaseLoader only
+    "py3langid>=0.4,<0.5",
 ]
 
 [project.urls]
@@ -39,6 +43,11 @@ Issues = "https://github.com/18hrshift/dogear-app/issues"
 
 [project.scripts]
 dogear = "dogear.cli:main"
+
+# Voice engines. Kokoro registers here the way a plugin package registers its own engine:
+# see docs/voice-engines.md.
+[project.entry-points."dogear.engines"]
+kokoro = "dogear.voice.kokoro_plugin:ENGINE"
 
 [dependency-groups]
 dev = [

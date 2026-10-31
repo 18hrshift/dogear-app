@@ -68,13 +68,17 @@ def render(
     **context: Any,
 ) -> Response:
     """A page. `title` comes before " - Dogear" in its <title>, after "Error: " when the
-    page has `errors`. `current` names the navigation link for this page, if any."""
+    page has `errors`. `current` names the navigation link for this page, if any. Every
+    page's footer says whether book text can leave this computer ([voice] allow_cloud)."""
     templates: Jinja2Templates = request.app.state.templates
+    shared = {
+        "title": title,
+        "errors": errors or {},
+        "current": current,
+        "cloud_allowed": request.app.state.config["voice"]["allow_cloud"],
+    }
     return templates.TemplateResponse(
-        request,
-        template,
-        {"title": title, "errors": errors or {}, "current": current, **context},
-        status_code=status_code,
+        request, template, {**shared, **context}, status_code=status_code
     )
 
 

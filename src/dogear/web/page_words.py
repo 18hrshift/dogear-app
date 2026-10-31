@@ -26,7 +26,12 @@ from pathlib import Path
 
 from dogear.errors import DogearError, PronunciationError
 from dogear.pronunciation_writer import pronunciation_file_text
-from dogear.pronunciations import Pronunciation, read_pronunciation_file, word_key
+from dogear.pronunciations import (
+    DEFAULT_LANGUAGES,
+    Pronunciation,
+    read_pronunciation_file,
+    word_key,
+)
 from dogear.web.atomic import FileInUse, write_atomically
 from dogear.web.private import private_folder
 from dogear.web.settings import WordLimits
@@ -152,7 +157,8 @@ class PageWords:
                     changed[word] = now
                     continue
                 if spelling:
-                    after[key] = Pronunciation(word, spelling, None, self.path)
+                    languages = existing.languages if existing is not None else DEFAULT_LANGUAGES
+                    after[key] = Pronunciation(word, spelling, None, self.path, languages)
                     if key not in before:
                         added = added or word
                 else:
@@ -171,13 +177,11 @@ class PageWords:
             self._write(sorted(after.values(), key=lambda e: word_key(e.word)))
 
     def _write(self, entries: list[Pronunciation]) -> None:
-        expected = [(e.word, e.sounds_like, e.phonemes) for e in entries]
+        expected = [_facts(e) for e in entries]
 
         def read_back(written: Path) -> None:
             try:
-                found = [
-                    (e.word, e.sounds_like, e.phonemes) for e in read_pronunciation_file(written)
-                ]
+                found = [_facts(e) for e in read_pronunciation_file(written)]
             except PronunciationError as e:
                 raise DogearError(
                     f"Dogear couldn't save its word list: the new file didn't read back "
@@ -213,6 +217,11 @@ class PageWords:
 
 def _same(before: dict[str, Pronunciation], after: dict[str, Pronunciation]) -> bool:
     def facts(entries: dict[str, Pronunciation]) -> dict[str, tuple]:
-        return {k: (e.word, e.sounds_like, e.phonemes) for k, e in entries.items()}
+        return {k: _facts(e) for k, e in entries.items()}
 
     return facts(before) == facts(after)
+
+
+def _facts(entry: Pronunciation) -> tuple:
+    """What an entry says, without the file it came from."""
+    return (entry.word, entry.sounds_like, entry.phonemes, entry.languages)

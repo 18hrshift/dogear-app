@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Send the text of this book to {{ hosts }}?</h1>
+<p>Book: <strong>{{ summary.title }}</strong>{% if summary.authors %}, by {{ summary.authors | join(", ") }}{% endif %}.</p>
+{% for sentence in warning %}
+<p>{{ sentence }}</p>
+{% endfor %}
+<p>Once it has started, choose Stop making this book, on the book's page, to stop it.{% if listen_sends %} Listen, on the page for checking how words are said, uses the voice you chose too, so the words it says are sent as well.{% endif %}</p>
+<form method="post" action="/books/{{ book_id }}/choose">
+  {% for name, value in fields %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <button type="submit" name="{{ send }}" value="yes">Send the text and start making</button>
+  <button type="submit" name="{{ send }}" value="no" class="secondary">Choose another voice</button>
+</form>
+{% endblock %}

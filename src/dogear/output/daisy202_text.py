@@ -53,11 +53,11 @@ def _item(body: etree._Element, item: TextItem, number: int) -> None:
             heading.text = xml_safe(words)
             _lang(heading, lang, number)
         case ParagraphText(sentences=sentences, lang=lang):
-            _lang(_sentences(x.element("p", body), sentences), lang, number)
+            _lang(_sentences(x.element("p", body), sentences, number), lang, number)
         case ListText(items=entries, ordered=ordered, lang=lang):
             listing = x.element("ol" if ordered else "ul", body)
             for entry in entries:
-                _sentences(x.element("li", listing), entry)
+                _sentences(x.element("li", listing), entry, number)
             _lang(listing, lang, number)
         case TableText():
             _table(body, item, number)
@@ -65,9 +65,9 @@ def _item(body: etree._Element, item: TextItem, number: int) -> None:
             if description or caption:
                 figure = x.element("div", body, **{"class": "image"})
                 if description:
-                    _sentences(x.element("p", figure), description)
+                    _sentences(x.element("p", figure), description, number)
                 if caption:
-                    _sentences(x.element("p", figure, **{"class": "caption"}), caption)
+                    _sentences(x.element("p", figure, **{"class": "caption"}), caption, number)
                 _lang(figure, lang, number)
         case NoteText(label=label, sentences=sentences, lang=lang):
             note = x.element("div", body, **{"class": "note"})
@@ -76,7 +76,7 @@ def _item(body: etree._Element, item: TextItem, number: int) -> None:
                 marker = x.element("span", paragraph, **{"class": "label"})
                 marker.text = xml_safe(label.strip())
                 marker.tail = " "
-            _sentences(paragraph, sentences)
+            _sentences(paragraph, sentences, number)
             _lang(note, lang, number)
         case PageText(id=id_, label=label, kind=kind):
             page = x.element("span", body, id=id_, **{"class": PAGE_CLASSES[kind]})
@@ -87,7 +87,9 @@ def _item(body: etree._Element, item: TextItem, number: int) -> None:
             raise TypeError(f"not a text item: {item!r}")
 
 
-def _sentences(parent: etree._Element, sentences: tuple[Sentence, ...]) -> etree._Element:
+def _sentences(
+    parent: etree._Element, sentences: tuple[Sentence, ...], number: int
+) -> etree._Element:
     """Each sentence as a span with its id, a space between them."""
     last = None
     for sentence in sentences:
@@ -95,13 +97,15 @@ def _sentences(parent: etree._Element, sentences: tuple[Sentence, ...]) -> etree
             last.tail = " "
         last = x.element("span", parent, id=sentence.id)
         last.text = xml_safe(sentence.text)
+        if sentence.lang:
+            _lang(last, sentence.lang, number)
     return parent
 
 
 def _table(body: etree._Element, table: TableText, number: int) -> None:
     el = x.element("table", body)
     if table.caption:
-        _sentences(x.element("caption", el), table.caption)
+        _sentences(x.element("caption", el), table.caption, number)
     if table.rows:
         if table.header_rows:
             _rows(x.element("thead", el), table.header_rows, header=True)

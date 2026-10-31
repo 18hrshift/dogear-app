@@ -1,6 +1,8 @@
 """Load settings: packaged defaults, overridden by an optional user TOML file.
 
-`defaults.toml` is the only place a default value lives. Code reads settings from the
+`defaults.toml` is the only place Dogear's own default values live. Each installed voice
+engine adds the defaults of its own table, named after it (Kokoro's [kokoro] comes from
+`voice/kokoro.toml`), and they are checked the same way. Code reads settings from the
 dict this module returns instead of keeping its own copies.
 """
 
@@ -27,7 +29,13 @@ FREEFORM_TABLES: dict[tuple[str, str], WordTableValues] = {
     ("speech", "currency_cents"): "pair",
     ("speech", "currency_scales"): "text",
     ("speech", "units"): "pair",
+    # Language tags, such as "fr", to voices, such as "piper:fr_FR-mls-medium". Which
+    # engines and voices are installed is checked by `dogear.voice.languages`.
+    ("voice", "languages"): "text",
 }
+# Tables of words that hold one table per language as well, such as [narration.words.fr]:
+# a key that is a language tag may be added, holding some of the table's own words.
+LANGUAGE_WORD_TABLES: set[tuple[str, ...]] = {("narration", "words")}
 # What each item must be in lists that are empty by default, where the default can't show it.
 EMPTY_LIST_ITEMS: dict[tuple[str, ...], type] = {
     ("pronunciation", "files"): str,
@@ -39,9 +47,21 @@ Config = dict[str, Any]
 CONFIG_ENV = "DOGEAR_CONFIG"
 
 
-def default_config() -> Config:
+def core_defaults() -> Config:
+    """Dogear's own defaults, from defaults.toml, without any voice engine's."""
     text = resources.files("dogear").joinpath("defaults.toml").read_text(encoding="utf-8")
     return tomllib.loads(text)
+
+
+def default_config() -> Config:
+    """Every default: Dogear's own, and each installed voice engine's table."""
+    # Imported here: the engines module reads core_defaults, and loads the plugins.
+    from dogear.voice.engines import engine_settings
+
+    config = core_defaults()
+    for name, settings in engine_settings().items():
+        config[name] = copy.deepcopy(settings)
+    return config
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -70,7 +90,31 @@ def load_config(path: Path | None = None) -> Config:
             f"Config file {path} is not valid TOML: {e}",
             hint="Check the line it names. Strings need quotes; tables look like [pdf].",
         ) from None
-    return _merge(config, user, ())
+    _check_engine_tables(config, user, path)
+    merged = _merge(config, user, ())
+    # Imported here: both modules read this one, and the voices check reads the
+    # installed engines.
+    from dogear.language_detection import check_detection_settings
+    from dogear.voice.language_voices import check_language_voices
+
+    check_language_voices(merged)
+    check_detection_settings(merged)
+    return merged
+
+
+def _check_engine_tables(config: Config, user: Config, path: Path) -> None:
+    """A table for a voice engine that is installed but couldn't be loaded gets its own
+    message: "Unknown setting" would send the reader looking for a typing mistake."""
+    from dogear.voice.engines import installed
+
+    for key in user:
+        broken = None if key in config else installed().broken_named(key)
+        if broken is not None:
+            raise ConfigError(
+                f"{path} has settings for the voice engine '{key}' ({broken.package}), which "
+                f"is installed but couldn't be loaded. {broken.problem}",
+                hint=f"Reinstall it, or take the [{key}] table out of the file.",
+            )
 
 
 def _merge(base: Config, override: Config, where: tuple[str, ...]) -> Config:
@@ -78,6 +122,9 @@ def _merge(base: Config, override: Config, where: tuple[str, ...]) -> Config:
     for key, value in override.items():
         here = (*where, key)
         name = ".".join(here)
+        if key not in base and where in LANGUAGE_WORD_TABLES and isinstance(value, dict):
+            merged[key] = _language_words(name, base, value)
+            continue
         if key not in base:
             known = ", ".join(sorted(base)) or "(none)"
             raise ConfigError(f"Unknown setting '{name}'.", hint=f"Known keys here: {known}.")
@@ -94,6 +141,30 @@ def _merge(base: Config, override: Config, where: tuple[str, ...]) -> Config:
             _check_type(here, default, value)
             merged[key] = value
     return merged
+
+
+def _language_words(name: str, base: Config, table: dict[str, Any]) -> dict[str, str]:
+    """A new language's table of words, such as [narration.words.it], checked against the
+    table it sits in. A word it leaves out is the base table's own."""
+    # Imported here: the module is small, but config.py is loaded by everything.
+    from dogear.output.language_tag import language_tag
+
+    language = name.rpartition(".")[2]
+    if language_tag(language) != language:
+        raise ConfigError(
+            f"Unknown setting '{name}'.",
+            hint="A table here is named after a language, as a BCP 47 tag such as it or pt-BR.",
+        )
+    words = {k: v for k, v in base.items() if isinstance(v, str)}
+    for key, value in table.items():
+        if key not in words:
+            raise ConfigError(
+                f"Unknown setting '{name}.{key}'.",
+                hint=f"Known keys here: {', '.join(sorted(words))}.",
+            )
+        if not isinstance(value, str):
+            raise ConfigError(f"'{name}.{key}' must be text in quotes, got {value!r}.")
+    return {**words, **table}
 
 
 def _check_word_table(name: str, table: dict[str, Any], values: WordTableValues) -> None:

@@ -10,9 +10,17 @@
 <form method="post" action="/books" enctype="multipart/form-data" novalidate>
   <div class="field{% if errors.get('book') %} has-error{% endif %}">
     <label for="book-file">Book file (required)</label>
-    <p class="hint" id="book-file-hint">An EPUB, PDF, MOBI, or AZW3 file, up to {{ max_upload }}. A PDF that is only pictures of pages, such as a scan, can't be read.</p>
+    <p class="hint" id="book-file-hint">An {{ book_formats }} file, up to {{ max_upload }}. A PDF that is only pictures of pages, such as a scan, can't be read.</p>
     {{ error_message(errors, "book", "book-file-error") }}
-    <input type="file" id="book-file" name="book" accept="{{ accept }}" aria-describedby="{{ describedby('book-file-hint', errors, 'book', 'book-file-error') }}">
+    {# No accept attribute, on purpose: the hint above names the kinds of book, and the
+       server checks the name (uploads.check_name) and says what to choose instead.
+       iOS turns each extension in accept into a system file type, and greys out every
+       file whose extension has none, which is MOBI and AZW3 (WebKit bug 279606): with
+       accept=".azw,.azw3,.epub,.mobi,.pdf", an iPhone can pick only EPUB and PDF.
+       Adding MIME types doesn't help, since a file iOS has no type for matches none,
+       and Kindle books go by three different MIME types. Chrome on Android shows every
+       file anyway once one extension is unknown to Android. #}
+    <input type="file" id="book-file" name="book" aria-describedby="{{ describedby('book-file-hint', errors, 'book', 'book-file-error') }}">
   </div>
   <button type="submit">Upload the book</button>
 </form>

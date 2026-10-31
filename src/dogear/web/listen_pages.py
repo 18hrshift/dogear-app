@@ -19,8 +19,8 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from dogear.output.filenames import safe_filename
+from dogear.sizes import describe_size
 from dogear.web.books import ID_PATTERN as BOOK_ID
-from dogear.web.downloads import describe_size
 from dogear.web.forms import FormTooBig, first, read_form
 from dogear.web.library import Library
 from dogear.web.listening import ID_PATTERN, Listen, ListenError, Listens, clean_text
@@ -33,7 +33,7 @@ WAIT_STEP_SECONDS = 0.1
 TITLE_CHARS = 60  # of the text, in the page title and the download's name
 PRONUNCIATIONS = "/pronunciations"
 # Pages a Listen goes back to, each with an optional fragment naming a place on it.
-BACK = re.compile(r"(/pronunciations|/books/[A-Za-z0-9_-]{16}/words)(#[a-z0-9-]{1,40})?")
+BACK = re.compile(r"(/pronunciations|/books/[A-Za-z0-9_-]{16}/words(/all)?)(#[a-z0-9-]{1,40})?")
 
 
 @dataclass(frozen=True)

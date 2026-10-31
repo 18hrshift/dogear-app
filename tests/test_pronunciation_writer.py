@@ -79,3 +79,19 @@ def test_an_empty_list_is_still_a_file_the_reader_takes(tmp_path):
 def test_an_entry_with_nothing_to_say_is_a_bug():
     with pytest.raises(ValueError, match="neither"):
         pronunciation_file_text([Pronunciation("Hyde", None, None, HERE)])
+
+
+def test_an_entrys_languages_come_back_as_written(tmp_path):
+    entries = [
+        Pronunciation("Mme", "madame", None, HERE, ("fr", "fr-CA")),
+        sounds("Utterson", "utter son"),
+    ]
+    path = tmp_path / "words.toml"
+    text = pronunciation_file_text(entries)
+    path.write_text(text, encoding="utf-8")
+    back = read_pronunciation_file(path)
+    assert [(e.word, e.sounds_like, e.languages) for e in back] == [
+        ("Mme", "madame", ("fr", "fr-CA")),
+        ("Utterson", "utter son", ("en",)),
+    ]
+    assert '"Utterson" = "utter son"' in text  # an English entry stays a plain spelling

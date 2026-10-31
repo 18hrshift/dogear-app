@@ -14,17 +14,21 @@ from __future__ import annotations
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import lxml.html
+from engine_fakes import entry_point_for, fake_engine, hum_voice
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
 from dogear.book_summary import BookSummary, SectionSummary
 from dogear.config import Config, default_config
 from dogear.unknown_words import UnknownWord
+from dogear.voice import engines
 from dogear.web.access_key import AccessKey
 from dogear.web.app import STATIC, create_app
 from dogear.web.books import Choices, Output
@@ -113,6 +117,14 @@ MAKING_LINES = [
     "Section 1 of 4 done: Title Page. About 12 minutes left.",
     "Section 2 of 4 done: Story of the Door. About 8 minutes left.",
 ]
+# A scanned PDF being read with OCR.
+OCR_LINES = [
+    "This PDF is scanned, so Dogear is reading its 240 pages with OCR, which takes a while: "
+    "often a few seconds a page.",
+    "Read 1 of 240 pages with OCR. About 9 minutes left.",
+    "Read 10 of 240 pages with OCR. About 8 minutes left.",
+    "Read 20 of 240 pages with OCR. About 8 minutes left.",
+]
 # A book that warns about every note and many words: repeats in a row are one line with a
 # count, and only the latest lines are shown.
 LONG_LINES = [
@@ -128,7 +140,7 @@ def render_pages(out_dir: Path) -> dict[str, Path]:
     script beside them in OUT_DIR/static. Returns the files by name."""
     out_dir.mkdir(parents=True, exist_ok=True)
     pages: dict[str, str] = {}
-    with tempfile.TemporaryDirectory() as temporary:
+    with _engines(), tempfile.TemporaryDirectory() as temporary:
         folder = Path(temporary)
         app = sample_app(folder)
         library: Library = app.state.library
@@ -141,13 +153,22 @@ def render_pages(out_dir: Path) -> dict[str, Path]:
         common = {"summary": summary}
         books = {
             "reading": add_book(library, folder, state="reading"),
+            "reading-ocr": add_book(library, folder, "scan.pdf", state="reading", lines=OCR_LINES),
+            "read-stopped": add_book(
+                library, folder, "scan.pdf", state="read_stopped", lines=OCR_LINES[:2]
+            ),
             "unreadable": add_book(
                 library,
                 folder,
                 "scan.pdf",
                 state="unreadable",
-                error="This PDF has no text layer: it is a scan.",
-                hint="Run dogear ocr on it first, then upload the new file.",
+                lines=OCR_LINES[:1],
+                error="This PDF is scanned, and reading it needs Tesseract OCR. tesseract was "
+                "not found.",
+                hint="Install Tesseract OCR (Windows: winget install UB-Mannheim.TesseractOCR; "
+                "macOS: brew install tesseract; Debian/Ubuntu: sudo apt install tesseract-ocr). "
+                "Or, to have Dogear stop at scanned PDFs instead, set auto_ocr = false under "
+                "[pdf] in your settings file.",
             ),
             "choose": add_book(library, folder, state="ready", **common),
             "choose-language": add_book(
@@ -192,13 +213,15 @@ def render_pages(out_dir: Path) -> dict[str, Path]:
             pages[name] = client.get(path).text
         # Voice and speed always have a value; formats and sections can all be unticked.
         pages["choose-errors"] = client.post(
-            f"/books/{books['choose']}/choose", data={"voice": "af_heart", "speed": "0.9"}
+            f"/books/{books['choose']}/choose", data={"voice": "kokoro:af_heart", "speed": "0.9"}
         ).text
         pages["choose-language-errors"] = client.post(
             f"/books/{books['choose-language']}/choose",
-            data={"format": "m4b", "voice": "af_heart", "speed": "0.9", "section": "1"},
+            data={"format": "m4b", "voice": "kokoro:af_heart", "speed": "0.9", "section": "1"},
         ).text
         pages["delete"] = client.get(f"/books/{books['done']}/delete").text
+        pages.update(_cloud_pages(folder / "cloud"))
+        pages.update(_language_voice_pages(library, client, folder))
         pages.update(_word_pages(app, client, folder))
         pages.update(_listen_pages(app, client))
         pages.update(_pronunciation_pages(app, client))
@@ -217,13 +240,65 @@ def render_pages(out_dir: Path) -> dict[str, Path]:
     return saved
 
 
-# Words a check found, most frequent first. The book has more than the page lists.
+CLOUD_HOST = "speech.example.com"
+
+
+@contextmanager
+def cloud_voices_installed() -> Iterator[None]:
+    """A stand-in voice engine beside the installed ones, whose voices send the text they
+    speak to CLOUD_HOST. Nothing is sent: its voices hum, and no page here makes a book."""
+    plugin = fake_engine(
+        "cloud",
+        "Cloud speech",
+        [
+            hum_voice("nova"),
+            hum_voice("onyx", gender="male"),
+            hum_voice("amelie", "fr-FR", description="French"),
+        ],
+        sends_to=CLOUD_HOST,
+    )
+    found = engines._entry_points
+    engines._entry_points = lambda: [*found(), entry_point_for(plugin)]
+    engines.installed.cache_clear()
+    try:
+        yield
+    finally:
+        engines._entry_points = found
+        engines.installed.cache_clear()
+
+
+def _cloud_pages(folder: Path) -> dict[str, str]:
+    """With cloud voices allowed: the choose form listing them, and the page that says
+    where the book's text goes before it starts, for a cloud voice chosen and for a
+    voice on this computer with a cloud voice for French in the settings."""
+    folder.mkdir()
+    with cloud_voices_installed():
+        config = sample_config(folder)
+        config["voice"]["allow_cloud"] = True
+        app = sample_app(folder, config)
+        client = visitor(app)
+        summary = sample_summary("Kidnapped")
+        book = add_book(app.state.library, folder, state="ready", summary=summary)
+        chosen = {"format": "m4b", "voice": "cloud:nova", "speed": "0.9", "section": ["1", "2"]}
+        pages = {
+            "choose-cloud": client.get(f"/books/{book}/choose").text,
+            "send-text": client.post(f"/books/{book}/choose", data=chosen).text,
+        }
+        app.state.config["voice"]["languages"] = {"fr": "cloud:amelie"}
+        kokoro = {**chosen, "voice": "kokoro:af_heart"}
+        pages["send-text-languages"] = client.post(f"/books/{book}/choose", data=kokoro).text
+        return pages
+
+
+# Words a check found, most frequent first. The book has more than the check kept.
 CHECKED_WORDS = (
     UnknownWord("Utterson", 131),
     UnknownWord("Lanyon", 40),
     UnknownWord("Poole", 12),
     UnknownWord("Enfield", 9),
 )
+# More words than the page lists at first, so it links to them all.
+MANY_WORDS = (*CHECKED_WORDS, *(UnknownWord(f"Name{n:02d}", 8) for n in range(1, 57)))
 
 
 def keep_check(library: Library, book_id: str, check: WordCheck) -> None:
@@ -236,6 +311,35 @@ def keep_listen(listens: Listens, listen: Listen) -> None:
     listens._listens[listen.id] = listen
     if listen.state == "done":
         (listens.folder / f"{listen.id}.wav").write_bytes(b"RIFF" + bytes(44_000))
+
+
+@contextmanager
+def _engines(*extra) -> Iterator[None]:
+    """Only Dogear's own voice engines, and `extra` stand-ins, whatever is installed where
+    the pages are made: an installed plugin would change what the pages offer."""
+    own = [e for e in engines._entry_points() if e.dist and e.dist.name == engines.OWN_PACKAGE]
+    with patch.object(engines, "_entry_points", lambda: [*own, *extra]):
+        engines.installed.cache_clear()
+        try:
+            yield
+        finally:
+            engines.installed.cache_clear()
+
+
+def _language_voice_pages(library: Library, client: TestClient, folder: Path) -> dict[str, str]:
+    """The choose page for a French book with a French voice installed (a stand-in engine):
+    its voices come first, and choosing an English voice is an error."""
+    voices = [hum_voice("fr_one", "fr-FR", description="French")]
+    pages = {}
+    with _engines(entry_point_for(fake_engine("lilt", "Lilt", voices))):
+        roman = replace(sample_summary("Le Roman"), language="fr")
+        book = add_book(library, folder, "roman.epub", state="ready", summary=roman)
+        pages["choose-language-voices"] = client.get(f"/books/{book}/choose").text
+        pages["choose-language-voices-errors"] = client.post(
+            f"/books/{book}/choose",
+            data={"format": "m4b", "voice": "kokoro:af_heart", "speed": "0.9", "section": "1"},
+        ).text
+    return pages
 
 
 def _word_pages(app: Starlette, client: TestClient, folder: Path) -> dict[str, str]:
@@ -252,6 +356,7 @@ def _word_pages(app: Starlette, client: TestClient, folder: Path) -> dict[str, s
         "words-waiting": WordCheck("waiting"),
         "words-checking": WordCheck("checking", sections=(2, 3)),
         "words-list": WordCheck("done", words=CHECKED_WORDS, total=64),
+        "words-many": WordCheck("done", words=MANY_WORDS, total=len(MANY_WORDS)),
         "words-empty": WordCheck("done", sections=(1,)),
         "words-failed": WordCheck(
             "failed",
@@ -265,6 +370,7 @@ def _word_pages(app: Starlette, client: TestClient, folder: Path) -> dict[str, s
         books[name] = add_book(library, folder, state="done", choices=CHOSEN, **summary)
         keep_check(library, books[name], check)
         pages[name] = client.get(f"/books/{books[name]}/words").text
+    pages["words-all"] = client.get(f"/books/{books['words-many']}/words/all").text
     page_words: PageWords = app.state.page_words
     page_words.save({"Lanyon": "lan yon"})
     listed = books["words-list"]

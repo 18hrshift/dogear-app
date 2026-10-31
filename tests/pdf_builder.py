@@ -298,6 +298,29 @@ def wrap(
     return lines
 
 
+def scanned(source: Path, path: Path, *, dpi: int = 150) -> Path:
+    """`source`, a PDF with text, as a scanner makes it: each page a picture of the page,
+    with no text layer. Pillow writes the PDF, one picture a page, at the page's size."""
+    import pypdfium2
+
+    with pypdfium2.PdfDocument(str(source)) as document:
+        pictures = [page.render(scale=dpi / 72).to_pil().convert("L") for page in document]
+    pictures[0].save(path, "PDF", resolution=dpi, save_all=True, append_images=pictures[1:])
+    return path
+
+
+def scanned_words(path: Path, pages: Sequence[str], *, dpi: int = 150) -> Path:
+    """A scanned PDF with these words in large type, one line a page."""
+    source = path.with_name(f"{path.stem}-text.pdf")
+    canvas = Canvas(str(source), pagesize=letter)
+    for words in pages:
+        canvas.setFont("Helvetica-Bold", 36)
+        canvas.drawString(MARGIN, PAGE_HEIGHT / 2, words)
+        canvas.showPage()
+    canvas.save()
+    return scanned(source, path, dpi=dpi)
+
+
 def alice(count: int, start: int = 0) -> list[str]:
     """`count` paragraphs of sample prose, cycling through the passage."""
     return [ALICE[(start + i) % len(ALICE)] for i in range(count)]

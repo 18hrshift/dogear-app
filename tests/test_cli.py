@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from engine_fakes import fake_engine, hum_voice
 
 from dogear import cli
 from dogear.document import (
@@ -38,7 +39,7 @@ def book(monkeypatch):
         source_path=Path("test.epub"),
         source_format="epub",
     )
-    monkeypatch.setattr(cli, "extract_book", lambda path, config: book)
+    monkeypatch.setattr(cli, "extract_book", lambda path, config, report: book)
     return book
 
 
@@ -111,6 +112,27 @@ def test_text_spoken_shows_one_normalized_sentence_per_line(book, capsys):
     out = capsys.readouterr().out
     assert "Doctor Smith had forty-two cats.\nThey were loud.\n" in out
     assert "Image: A red door." in out
+
+
+def test_text_spoken_says_where_each_language_and_voice_starts(
+    book, capsys, installed_engines, tmp_path
+):
+    installed_engines(fake_engine("lilt", "Lilt", [hum_voice("fr_one", "fr-FR")]))
+    book.sections[1].blocks.insert(3, Paragraph("Il avait 42 chats.", lang="fr"))
+    assert cli.main(["text", "test.epub", "--spoken", "--section", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "[In fr, read by kokoro:af_heart, which doesn't speak it.]\nIl avait 42 chats.\n" in out
+    settings = tmp_path / "settings.toml"
+    settings.write_text('[voice.languages]\nfr = "lilt:fr_one"\n', encoding="utf-8")
+    assert cli.main(["text", "test.epub", "--spoken", "--config", str(settings)]) == 0
+    out = capsys.readouterr().out
+    assert out.count("[In en, read by kokoro:af_heart.]") == 3  # each section, and after
+    assert "[In fr, read by lilt:fr_one.]\nIl avait 42 chats.\n" in out
+
+
+def test_text_spoken_in_one_language_has_no_voice_lines(book, capsys):
+    assert cli.main(["text", "test.epub", "--spoken"]) == 0
+    assert "[In " not in capsys.readouterr().out
 
 
 def test_bad_section_number_explains_the_fix(book, capsys):

@@ -13,6 +13,7 @@ import zipfile
 from dataclasses import replace
 from pathlib import Path
 
+import fake_dogear
 import pytest
 from web_samples import CHOSEN, add_book, sample_app, sample_config, sample_summary, visitor
 
@@ -87,8 +88,20 @@ def wait_for(app, book_id: str, *states: str, timeout: float = 30) -> BookRecord
     raise AssertionError(f"book {book_id} is {record.state if record else 'gone'}, not {states}")
 
 
+def wait_until_idle(worker, timeout: float = 30) -> None:
+    deadline = time.monotonic() + timeout
+    while worker.running() is not None:
+        assert time.monotonic() < deadline, f"the worker is still running {worker.running()}"
+        time.sleep(0.05)
+
+
 def choose(client, book_id: str, **fields) -> None:
-    data = {"format": ["m4b"], "voice": "af_heart", "speed": "0.9", "section": ["1", "2", "3"]}
+    data = {
+        "format": ["m4b"],
+        "voice": "kokoro:af_heart",
+        "speed": "0.9",
+        "section": ["1", "2", "3"],
+    }
     data.update(fields)
     response = client.post(f"/books/{book_id}/choose", data=data, follow_redirects=False)
     assert response.status_code == 303, response.text
@@ -131,7 +144,7 @@ def test_a_book_is_read_chosen_made_and_downloaded(running, commands):
     assert outline[0] == "outline" and outline[2] == "--json"
     assert make[0] == "make"
     assert make[make.index("--format") + 1] == "m4b,mp3"
-    assert make[make.index("--voice") + 1] == "af_heart"
+    assert make[make.index("--voice") + 1] == "kokoro:af_heart"
     assert make[make.index("--speed") + 1] == "1"
     assert make[make.index("--sections") + 1] == "2-3"
     assert Path(make[make.index("-o") + 1]) == app.state.library.folder(book_id) / "made"
@@ -198,6 +211,73 @@ def test_a_read_stopped_by_something_else_is_no_bug_and_can_be_read_again(runnin
     wait_for(app, book_id, "ready")
 
 
+def test_reading_shows_its_progress_and_outlasts_the_timeout_while_it_reports(tmp_path, commands):
+    """The stand-in reads a "scanned PDF" for 2.4 seconds, reporting every 0.4, and the
+    timeout is 1 second: it counts from the latest progress line, so a long read that
+    keeps reporting, as reading with OCR does, is never cut short."""
+    config = sample_config(tmp_path / "web")
+    config["web"]["read_timeout_seconds"] = 1
+    app = sample_app(tmp_path / "web", config)
+    with visitor(app) as client:
+        book_id = upload(client, "scanread")
+        deadline = time.monotonic() + 30
+        while len(status(client, book_id)["lines"]) < 2:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        page = client.get(f"/books/{book_id}").text
+        record = wait_for(app, book_id, "ready")
+    assert f"<li>{fake_dogear.SCAN_START}</li>" in page
+    assert 'role="status">Read ' in page  # the latest line, for screen readers
+    assert "Stop reading this book</button>" in page
+    assert record.summary.title == "Fake Book"
+    lines = [line.text for line in app.state.library.progress(book_id).lines]
+    assert lines == [fake_dogear.SCAN_START] + [
+        f"Read {n} of 6 pages with OCR." for n in range(1, 7)
+    ]
+
+
+def test_a_read_that_goes_quiet_for_the_timeout_is_stopped(tmp_path, commands):
+    config = sample_config(tmp_path / "web")
+    config["web"]["read_timeout_seconds"] = 1.5
+    app = sample_app(tmp_path / "web", config)
+    with visitor(app) as client:
+        book_id = upload(client, "slowread")
+        record = wait_for(app, book_id, "unreadable")
+    assert record.error == (
+        "Dogear went 1.5 seconds without any progress reading this book, so it stopped."
+    )
+    assert record.hint.startswith("Choose Read again.")
+
+
+def test_a_read_stopped_from_its_page_stays_stopped_until_read_again(running, pids):
+    app, client = running
+    book_id = upload(client, "slowread")
+    pids()  # being read
+    assert "Stop reading this book</button>" in client.get(f"/books/{book_id}").text
+    response = client.post(f"/books/{book_id}/stop", follow_redirects=False)
+    assert response.headers["location"] == f"/books/{book_id}"
+    assert app.state.library.reader.wait_until_not_running(book_id, 30)
+    assert app.state.library.get(book_id).state == "read_stopped"
+    page = client.get(f"/books/{book_id}").text
+    assert "<h1>Reading this book stopped</h1>" in page
+    assert "Read again</button>" in page
+    assert "Stopped.</li>" not in page  # the child's goodbye for a terminal isn't kept
+
+    set_behaviour(app, book_id, "ok")
+    client.post(f"/books/{book_id}/read")
+    assert wait_for(app, book_id, "ready").summary.title == "Fake Book"
+
+
+def test_read_again_right_after_stop_waits_for_the_stopped_read_to_end(running, pids):
+    app, client = running
+    book_id = upload(client, "slowread")
+    pids()
+    client.post(f"/books/{book_id}/stop")
+    set_behaviour(app, book_id, "ok")
+    client.post(f"/books/{book_id}/read")  # while the stopped child may still be ending
+    assert wait_for(app, book_id, "ready").summary.title == "Fake Book"
+
+
 def test_a_book_being_read_when_the_server_stops_is_read_again_when_it_starts(
     tmp_path, commands, pids
 ):
@@ -250,10 +330,12 @@ def test_a_bug_while_making_ends_the_child_before_the_job_ends(running, monkeypa
     maker = pids()
     record = wait_for(app, book_id, "failed")
     assert record.error == UNEXPECTED
-    assert app.state.library.maker.running() is None
+    # The child was ended before the job failed the book; the worker lets go of the job
+    # a moment after that, so it is waited for rather than caught mid-step.
     if os.name != "nt":
         with pytest.raises(ProcessLookupError):
             os.kill(maker, 0)  # ended, and waited for
+    wait_until_idle(app.state.library.maker)
 
     monkeypatch.setattr(making, "read_lines", child.read_lines)
     set_behaviour(app, book_id, "ok")
@@ -354,12 +436,12 @@ def test_stop_then_start_again(running):
     set_behaviour(app, book_id, "ok")
     client.post(f"/books/{book_id}/again")
     record = wait_for(app, book_id, "done")
-    assert record.choices == Choices(("m4b",), "af_heart", 0.9, (1, 2, 3))
+    assert record.choices == Choices(("m4b",), "kokoro:af_heart", 0.9, (1, 2, 3))
 
 
 @pytest.mark.parametrize("how", ["stop", "server closing"])
 def test_once_stopped_the_childs_goodbye_for_a_terminal_is_not_shown(tmp_path, commands, how):
-    """`dogear make` says "Run the same command again to continue" when stopped. The page
+    """`dogear make` says "Run the same command again to carry on" when stopped. The page
     has its own words for that (Start again), so nothing the child says after the server
     asked it to stop is kept."""
     app = sample_app(tmp_path / "web")

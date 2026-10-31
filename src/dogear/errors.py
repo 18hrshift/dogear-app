@@ -35,12 +35,20 @@ class ToolFailedError(DogearError):
     """An external program ran but reported an error."""
 
 
+class OcrLanguageError(DogearError):
+    """Tesseract is installed, but not the language data that ocr.language asks for."""
+
+
 class DownloadError(DogearError):
     """A voice model file couldn't be downloaded, or didn't match its checksum."""
 
 
 class VoiceError(DogearError):
     """The voice engine can't be set up as configured, or can't speak this book."""
+
+
+class DiskSpaceError(DogearError):
+    """A disk doesn't have the free space a book needs, so it wasn't started."""
 
 
 class OutputFolderError(DogearError):

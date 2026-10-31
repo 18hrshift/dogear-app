@@ -10,7 +10,10 @@ exact phonemes, in the symbols of misaki, Kokoro's phonemizer:
     Lanyon = { phonemes = "lˈænjən" }  # exact phonemes
 
 Sounds-like entries are applied in speech normalization, so they work for any voice and
-show in `dogear text --spoken`. Phoneme entries are pinned by the Kokoro voice's G2P,
+show in `dogear text --spoken`. They apply to English text only, since a spelling that
+sounds right read as English sounds wrong read as French, unless the entry lists its
+languages: `Mme = { sounds_like = "madame", languages = ["fr"] }`. Phoneme entries are
+pinned by the Kokoro voice's G2P,
 and only to plain words: Dogear spells out abbreviations, numbers, and symbols before
 the voice sees the text, so a phoneme entry written with them would never be found.
 Files are read in order; when two list the same word, the later file wins. People write
@@ -28,10 +31,15 @@ from typing import Any
 
 from dogear.config import Config
 from dogear.errors import PronunciationError
+from dogear.language_match import ENGLISH, same_language
+from dogear.output.language_tag import language_tag
 from dogear.speech.word_match import WordMatch, WordMatcher
 
 _TABLE = "words"
 _PHONEMES = "phonemes"
+_SOUNDS_LIKE = "sounds_like"
+_LANGUAGES = "languages"
+DEFAULT_LANGUAGES = (ENGLISH,)  # what a sounds-like entry applies to unless it says
 _QUOTES_HINT = (
     "A word with spaces, dots, apostrophes, or letters other than A to Z needs quotes, "
     'such as "St. John" = "sin jun".'
@@ -44,10 +52,17 @@ class Pronunciation:
     sounds_like: str | None  # the spelling the voice reads instead; or
     phonemes: str | None  # the exact phonemes. Exactly one of the two is set.
     source: Path  # the file it came from
+    # The languages whose text a sounds-like entry applies to, as BCP 47 tags; any
+    # tag of the same language matches ("en" covers en-GB).
+    languages: tuple[str, ...] = DEFAULT_LANGUAGES
 
     def where(self) -> str:
         """The entry and its file, for messages."""
         return f"'{self.word}' in {self.source}"
+
+    def applies_to(self, lang: str | None) -> bool:
+        """Whether the entry applies to text in `lang` (None: English, as Dogear reads it)."""
+        return any(same_language(tag, lang) for tag in self.languages)
 
 
 class PronunciationDictionary:
@@ -56,6 +71,7 @@ class PronunciationDictionary:
     def __init__(self, entries: Iterable[Pronunciation] = ()) -> None:
         self.entries = tuple(entries)
         self._matcher = WordMatcher([entry.word for entry in self.entries])
+        self._by_language: dict[str, PronunciationDictionary] = {}
 
     def find(self, text: str) -> Iterator[tuple[WordMatch, Pronunciation]]:
         for match in self._matcher.finditer(text):
@@ -63,6 +79,15 @@ class PronunciationDictionary:
 
     def with_phonemes(self) -> PronunciationDictionary:
         return PronunciationDictionary(e for e in self.entries if e.phonemes is not None)
+
+    def for_language(self, lang: str | None) -> PronunciationDictionary:
+        """The entries that apply to text in `lang`. Phoneme entries apply to English."""
+        key = (lang or ENGLISH).lower()
+        if key not in self._by_language:
+            self._by_language[key] = PronunciationDictionary(
+                e for e in self.entries if e.applies_to(lang)
+            )
+        return self._by_language[key]
 
     def say_sounds_like(self, text: str) -> str:
         """`text` with each sounds-like entry's word replaced by its spelling.
@@ -190,6 +215,16 @@ def _entry(key: str, value: Any, path: Path) -> Pronunciation:
             )
         return Pronunciation(word, sounds_like=sounds_like, phonemes=None, source=path)
     if isinstance(value, dict):
+        unknown = sorted(set(value) - {_PHONEMES, _SOUNDS_LIKE, _LANGUAGES})
+        if unknown:
+            raise PronunciationError(
+                f"The entry {where} has '{unknown[0]}', which an entry can't have.",
+                hint=f'An entry is a spelling in quotes, {{ {_SOUNDS_LIKE} = "...", '
+                f'{_LANGUAGES} = ["fr"] }}, or {{ {_PHONEMES} = "..." }}. If the word has a dot '
+                f"in it, put the whole word in quotes. {_QUOTES_HINT}",
+            )
+        if _SOUNDS_LIKE in value:
+            return _sounds_like_table(value, word, where, path)
         phonemes = _phonemes(value, word, where)
         return Pronunciation(word, sounds_like=None, phonemes=phonemes, source=path)
     raise PronunciationError(
@@ -199,13 +234,45 @@ def _entry(key: str, value: Any, path: Path) -> Pronunciation:
     )
 
 
-def _phonemes(value: dict[str, Any], word: str, where: str) -> str:
-    unknown = sorted(set(value) - {_PHONEMES})
-    if unknown:
+def _sounds_like_table(value: dict[str, Any], word: str, where: str, path: Path) -> Pronunciation:
+    """An entry written as { sounds_like = "...", languages = [...] }."""
+    if _PHONEMES in value:
         raise PronunciationError(
-            f"The entry {where} has '{unknown[0]}', which an entry can't have.",
-            hint=f'An entry is a spelling in quotes, or {{ {_PHONEMES} = "..." }}. If the word '
-            f"has a dot in it, put the whole word in quotes. {_QUOTES_HINT}",
+            f"The entry {where} has both {_SOUNDS_LIKE} and {_PHONEMES}.",
+            hint="Keep one of them: a spelling to read instead, or the exact phonemes.",
+        )
+    spelling = value[_SOUNDS_LIKE]
+    if not isinstance(spelling, str) or not spelling.strip():
+        raise PronunciationError(
+            f"The entry {where} needs its {_SOUNDS_LIKE} written in quotes.",
+            hint=f'For example: Mme = {{ {_SOUNDS_LIKE} = "madame", {_LANGUAGES} = ["fr"] }}',
+        )
+    languages = value.get(_LANGUAGES, list(DEFAULT_LANGUAGES))
+    if (
+        not isinstance(languages, list)
+        or not languages
+        or not all(isinstance(t, str) and language_tag(t) == t for t in languages)
+    ):
+        raise PronunciationError(
+            f"The entry {where} has {_LANGUAGES} = {languages!r}, which isn't a list of languages.",
+            hint=f"List the languages it applies to as BCP 47 tags in quotes, such as "
+            f'{_LANGUAGES} = ["fr"] or ["en", "fr"].',
+        )
+    return Pronunciation(
+        word,
+        sounds_like=" ".join(spelling.split()),
+        phonemes=None,
+        source=path,
+        languages=tuple(languages),
+    )
+
+
+def _phonemes(value: dict[str, Any], word: str, where: str) -> str:
+    if _LANGUAGES in value:
+        raise PronunciationError(
+            f"The entry {where} gives {_LANGUAGES}, but its phonemes are in the Kokoro "
+            "voice's English symbols, so it applies to English only.",
+            hint=f"Take out {_LANGUAGES}, or give the entry a {_SOUNDS_LIKE} spelling instead.",
         )
     phonemes = value.get(_PHONEMES)
     if not isinstance(phonemes, str) or not phonemes.strip():

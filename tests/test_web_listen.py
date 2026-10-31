@@ -271,12 +271,15 @@ def test_back_goes_only_to_dogears_own_pages():
     book = "/books/" + "A" * 16 + "/words"
     assert back_to(book) == book
     assert back_to(book + "#word-3") == book + "#word-3"
+    assert back_to(book + "/all#word-55") == book + "/all#word-55"
     assert back_to("/pronunciations#try") == "/pronunciations#try"
     for elsewhere in (
         "https://evil.example/",
         "//evil.example/pronunciations",
         "/pronunciations/../help",
         "/books/x/words",
+        book + "/other",
+        book + "/all/../../../help",
         book + "#<script>",
         "",
     ):

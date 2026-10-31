@@ -20,9 +20,11 @@ from dogear.narration import SectionNarration, Utterance
 from dogear.paths import cache_dir
 from dogear.render import render_book
 from dogear.render.progress import Report
+from dogear.render.voices import OneVoice
 from dogear.speech.normalize import SpeechRules, normalize_for_speech
 from dogear.speech.sentences import SentenceRules, split_sentences
 from dogear.voice import make_engine
+from dogear.voice.engines import configured_voice
 
 _TITLE = "Said aloud"  # the one section's title; never spoken
 
@@ -36,29 +38,32 @@ class Said:
 def say_text(text: str, output: Path, config: Config, report: Report) -> list[Said]:
     """Speak `text` into the WAV file `output`, the way `dogear make` would."""
     _check_output(output)
-    utterances = spoken_sentences(text, config)
+    # Said in the voice's own language: a French voice's text isn't read as English.
+    utterances = spoken_sentences(text, config, configured_voice(config).voice.language)
     engine = make_engine(config, report)
     narration = SectionNarration(1, Section(_TITLE, blocks=[Paragraph(text.strip())]), utterances)
     work_root = cache_dir(config) / "work"
     work_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=work_root) as work:
         # Progress lines ("Section 1 of 1 done") are noise for a few words.
-        [chapter] = render_book([narration], engine, config, Path(work), lambda line: None)
+        [chapter] = render_book(
+            [narration], OneVoice(engine), config, Path(work), lambda line: None
+        )
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(chapter.path, output)
     return [Said(u.spoken, engine.plan(u.spoken).payload) for u in utterances]
 
 
-def spoken_sentences(text: str, config: Config) -> list[Utterance]:
-    """The text as sentences the voice says, with the usual pause after each."""
+def spoken_sentences(text: str, config: Config, lang: str | None = None) -> list[Utterance]:
+    """The text, in `lang`, as sentences the voice says, with the usual pause after each."""
     rules = SpeechRules.from_config(config)
     split = SentenceRules.from_config(config)
     pause = config["narration"]["pauses"]["sentence_ms"]
     utterances = []
     for sentence in split_sentences(text, split):
-        spoken = normalize_for_speech(sentence, rules, None)
+        spoken = normalize_for_speech(sentence, rules, lang)
         if spoken:
-            utterances.append(Utterance(sentence, spoken, pause))
+            utterances.append(Utterance(sentence, spoken, pause, lang))
     if not utterances:
         raise DogearError(
             "There are no words to say in that text.",

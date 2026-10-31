@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dogear.output.folder_record import RECORD_NAME
+from dogear.sizes import describe_size
 from dogear.web.books import MADE, ZIPS, BookRecord, Output
 from dogear.web.choices import FORMAT_INFO
 
@@ -94,16 +95,6 @@ def zip_folder(folder: Path, book_folder: Path, run: str) -> Path:
         Path(partial).unlink(missing_ok=True)
         raise
     return target
-
-
-def describe_size(size: int) -> str:
-    """'540 KB', '116 MB', '1.2 GB'."""
-    for unit, scale in (("GB", 1024**3), ("MB", 1024**2), ("KB", 1024)):
-        if size >= scale:
-            amount = size / scale
-            text = f"{amount:.1f}" if amount < 10 else f"{amount:,.0f}"
-            return f"{text.removesuffix('.0')} {unit}"
-    return f"{size} bytes" if size != 1 else "1 byte"
 
 
 def media_type(path: Path) -> str:

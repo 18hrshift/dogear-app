@@ -506,3 +506,41 @@ def test_unpack_after_another_dogear_unpacked_and_removed_the_wheel(tmp_path):
     model_wheel(tmp_path)
     target = unpack_spacy_model(tmp_path)  # the other Dogear
     assert unpack_spacy_model(tmp_path) == target  # no wheel now, and none needed
+
+
+def test_hashing_a_big_file_says_how_far_it_has_got(tmp_path, monkeypatch):
+    monkeypatch.setattr(downloads, "_REPORT_FROM", 100)
+    monkeypatch.setattr(downloads, "_CHUNK", 30)
+    path = tmp_path / "model.onnx"
+    path.write_bytes(bytes(range(200)))
+    lines = []
+    assert downloads.file_sha256(path, lines.append) == sha256(bytes(range(200)))
+    assert lines == [f"model.onnx: {n}% checked." for n in (25, 50, 75, 100)]
+    assert downloads.file_sha256(path) == sha256(bytes(range(200)))  # quietly, by default
+
+
+def test_a_folders_hash_is_of_each_files_hash_and_path_sorted(tmp_path):
+    folder = tmp_path / "model"
+    (folder / "vocab").mkdir(parents=True)
+    (folder / "vocab" / "strings.json").write_bytes(b"[]")
+    (folder / "config.cfg").write_bytes(b"[nlp]")
+    lines = f"{sha256(b'[nlp]')}  config.cfg\n{sha256(b'[]')}  vocab/strings.json\n"
+    assert downloads.folder_sha256(folder) == sha256(lines.encode())
+
+
+@pytest.mark.parametrize("change", ["edit", "add", "remove", "rename"])
+def test_any_change_to_a_folder_changes_its_hash(tmp_path, change):
+    folder = tmp_path / "model"
+    (folder / "tagger").mkdir(parents=True)
+    (folder / "tagger" / "model").write_bytes(b"weights")
+    (folder / "meta.json").write_bytes(b"{}")
+    before = downloads.folder_sha256(folder)
+    if change == "edit":
+        (folder / "meta.json").write_bytes(b"{ }")
+    elif change == "add":
+        (folder / "extra").write_bytes(b"")
+    elif change == "remove":
+        (folder / "meta.json").unlink()
+    else:
+        (folder / "meta.json").rename(folder / "meta.txt")
+    assert downloads.folder_sha256(folder) != before

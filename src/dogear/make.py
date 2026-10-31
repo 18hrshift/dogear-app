@@ -10,10 +10,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dogear.config import Config
+from dogear.disk_space import check_space, space_needed
 from dogear.document import Book
 from dogear.errors import DogearError, OutputFolderError, VoiceError
 from dogear.extract import extract_book
-from dogear.narration import SectionNarration, narrate_book, narrate_title, opens_with_title
+from dogear.language_detection import DetectionSettings, LanguageGuesser, language_guesser
+from dogear.language_match import is_english, primary
+from dogear.narration import (
+    SectionNarration,
+    has_narration_words,
+    narrate_book,
+    narrate_title,
+    opens_with_title,
+)
 from dogear.output import build_m4b, build_mp3_folder, normalize_chapters
 from dogear.output.daisy202 import build_daisy202
 from dogear.output.epub3 import build_epub3
@@ -25,7 +34,16 @@ from dogear.readalong import build_readalong
 from dogear.render import render_book
 from dogear.render.progress import Progress, Report
 from dogear.render.work import work_folder
-from dogear.voice import make_engine
+from dogear.voice import make_voice, voice_pace
+from dogear.voice.book_voices import (
+    BookVoices,
+    VoiceUse,
+    book_pace,
+    unspoken_languages,
+    voices_needed,
+)
+from dogear.voice.cloud import refuse_unless_allowed
+from dogear.voice.language_voices import LanguageVoices, voices_for
 
 # m4b: one audiobook file with chapters. mp3: a folder of MP3 files with a playlist.
 # epub: an EPUB 3 talking book, text and audio in step. daisy: a DAISY 2.02 talking book.
@@ -43,13 +61,22 @@ class MakeRequest:
 def make_audiobook(request: MakeRequest, config: Config, report: Report) -> list[Path]:
     """Make the configured outputs for one book. Returns what was saved, in order."""
     formats = _formats(config)
-    book = extract_book(request.book, config)
+    choices = LanguageVoices.from_config(config)
+    # A voice that would send the text off this computer, unless allowed, stops the run
+    # before the book is even read: any voice the run may use. make_voice says where the
+    # text goes, just before it is sent.
+    refuse_unless_allowed(choices.voices(), config)
+    book = extract_book(request.book, config, report)
     if request.language:
         book.metadata.language = request.language
-    check_language(book)
+    settle_language(book, choices, report)
+    check_language(book, choices)
     check_ffmpeg(config)
     outputs = _output_paths(book, request, formats)
-    narrations = chosen_narrations(narrate_book(book, config), request.sections, len(book.sections))
+    guesser = guesser_for(config, choices, report)
+    narrations = chosen_narrations(
+        narrate_book(book, config, guesser), request.sections, len(book.sections)
+    )
     chosen = len(narrations)
     title_page = bool(narrations) and opens_with_title(narrations[0], book.metadata.title)
     if config["narration"]["announce_title"] and not title_page:
@@ -66,9 +93,22 @@ def make_audiobook(request: MakeRequest, config: Config, report: Report) -> list
         f"{title_track}, about {_count(progress.total_words, 'word')}, "
         f"voice {config['voice']['voice']}."
     )
-    engine = make_engine(config, report)
+    uses = voices_needed(narrations, choices) or [VoiceUse(choices.main, (), 0)]
+    report_voices(uses, narrations, choices, config, report)
+    # Before the voices load (or download), so a book that won't fit stops at once.
+    needs = space_needed(
+        progress.total_words,
+        formats,
+        cache_dir(config),
+        request.output_dir,
+        book_pace(voice_pace(config, use.voice) for use in uses),
+        config,
+    )
+    check_space(needs, config)
+    voices = load_voices(config, choices, uses, report)
+    readers = [use.voice for use in uses]  # named as the talking books' narrators
     with work_folder(cache_dir(config) / "work") as work:
-        chapters = render_book(narrations, engine, config, work, report, progress)
+        chapters = render_book(narrations, voices, config, work, report, progress)
         report(progress.summary())
         report("Evening out the volume across chapters.")
         chapters = normalize_chapters(chapters, work, config)
@@ -84,10 +124,10 @@ def make_audiobook(request: MakeRequest, config: Config, report: Report) -> list
             sections = encode_talking_audio(sections, work, config)
             if "epub" in formats:
                 report("Building the EPUB talking book.")
-                build_epub3(sections, book.metadata, outputs["epub"], config)
+                build_epub3(sections, book.metadata, outputs["epub"], config, voices=readers)
             if "daisy" in formats:
                 report("Building the DAISY talking book.")
-                build_daisy202(sections, book.metadata, outputs["daisy"], config)
+                build_daisy202(sections, book.metadata, outputs["daisy"], config, voices=readers)
     return [outputs[f] for f in FORMATS if f in formats]
 
 
@@ -111,19 +151,122 @@ def _output_paths(book: Book, request: MakeRequest, formats: list[str]) -> dict[
     return paths
 
 
-def speaks_language(language: str | None) -> bool:
-    """Whether the voice speaks a book in `language` (a BCP 47 tag; None if unknown)."""
-    return not language or language.lower().startswith("en")
+def load_voices(
+    config: Config, choices: LanguageVoices, uses: list[VoiceUse], report: Report
+) -> BookVoices:
+    """Load each voice the book needs, once, through `make_voice` like any other. Every
+    one is among the voices the settings allow a run (`voices_for_run`), which can be
+    checked before the book is read."""
+    allowed = {c.spec for c in choices.voices()}
+    engines = {}
+    for use in uses:
+        if use.voice.spec not in allowed:
+            raise VoiceError(
+                f"The voice {use.voice.spec} was chosen for a passage, but the settings don't "
+                "give it to any language.",
+                hint="This is a bug in Dogear. Please report it, saying what you ran.",
+            )
+        engines[use.voice.spec] = make_voice(config, use.voice, report)
+    return BookVoices(choices, engines)
 
 
-def check_language(book: Book) -> None:
+def settle_language(book: Book, choices: LanguageVoices, report: Report) -> None:
+    """A book that doesn't say its language is read as English, unless the main voice
+    speaks another: then it is taken to be in the main voice's language."""
+    voice = choices.main.voice
+    if book.metadata.language or is_english(voice.language):
+        return
+    book.metadata.language = primary(voice.language)
+    report(
+        f"This book doesn't say what language it's in, so Dogear takes it to be in "
+        f"{book.metadata.language}, the language of the voice {voice.name} "
+        f"({voice.description}). If that's wrong, use --language."
+    )
+
+
+def check_language(book: Book, choices: LanguageVoices) -> None:
+    """Stop before anything slow if no voice Dogear would use speaks the book's language."""
     language = book.metadata.language
-    if not speaks_language(language):
-        raise VoiceError(
-            f"This book is marked as being in '{language}', but Dogear's voice only speaks "
-            "English so far.",
-            hint="If the book is really in English, run the command again with --language en.",
+    if choices.speaks(language):
+        return
+    found = voices_for(language or "", choices.config)
+    if found:
+        where = (
+            f"To read it in {language}, choose one of its voices with --voice, such as "
+            f"{found[0].spec}, or give the language a voice under [voice.languages] in your "
+            "settings."
         )
+    else:
+        where = (
+            f"No installed voice speaks {language}. Voice engine plugins, such as Piper, "
+            "add voices in other languages: the README says how to install one."
+        )
+    raise VoiceError(
+        f"This book is marked as being in '{language}', but the voice "
+        f"{choices.main.voice.name} speaks {choices.main.voice.description}.",
+        hint=f"{where} If the book is really in English, run the command again with --language en.",
+    )
+
+
+def guesser_for(config: Config, choices: LanguageVoices, report: Report) -> LanguageGuesser | None:
+    """A language guesser, when [language_detection] is on and there is something to
+    find: a voice for more than one language."""
+    if not DetectionSettings.from_config(config).enabled:
+        return None
+    languages = choices.languages()
+    guesser = language_guesser(config, languages)
+    if guesser is None:
+        report(
+            f"Language detection is on, but every voice Dogear would use speaks "
+            f"{', '.join(sorted(languages))}, so there's nothing to look for. Give another "
+            "language a voice under [voice.languages] to look for it."
+        )
+    else:
+        report(
+            "Looking for passages the book doesn't mark as being in another language, "
+            f"among: {', '.join(sorted(languages))}."
+        )
+    return guesser
+
+
+def report_voices(
+    uses: list[VoiceUse],
+    narrations: list[SectionNarration],
+    choices: LanguageVoices,
+    config: Config,
+    report: Report,
+) -> None:
+    """Say which voice reads what, when more than the main voice does, and what is read
+    without a voice or words of its own language."""
+    if len(uses) > 1 or uses[0].voice.spec != choices.main.spec:
+        for use in uses:
+            voice = use.voice
+            languages = " and ".join(use.languages) or "no marked language"
+            report(
+                f"The voice {voice.voice.name} ({voice.engine.title}, {voice.voice.description}) "
+                f"reads {_count(use.utterances, 'sentence')} in {languages}."
+            )
+    for language, count in sorted(unspoken_languages(narrations, choices).items()):
+        found = voices_for(language, config)
+        offer = (
+            f"Voices for {language}: {', '.join(c.spec for c in found)}. Give it one under "
+            '[voice.languages] in your settings, or set other_languages = "best" under [voice].'
+            if found
+            else f"No installed voice speaks {language}."
+        )
+        report(
+            f"{_count(count, 'sentence')} in {language} {'is' if count == 1 else 'are'} read by "
+            f"{choices.main.voice.name}, "
+            f"which speaks {choices.main.voice.description}. {offer}"
+        )
+    used = {primary(u.lang) for n in narrations for u in n.utterances if u.spoken}
+    for language in sorted(used):
+        if not has_narration_words(config, language):
+            report(
+                f"Dogear has no {language} words for the structure it reads aloud (such as "
+                f"Image and Note), so it says them in English. Add a [narration.words.{language}] "
+                "table to your settings to change that."
+            )
 
 
 def parse_formats(spec: str) -> list[str]:

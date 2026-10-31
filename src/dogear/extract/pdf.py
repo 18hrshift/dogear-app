@@ -11,6 +11,10 @@ page (`pdf_notes`); put columns in reading order (`pdf_columns`); link note mark
 the text to their notes; attach captions to figures (`pdf_figures`); find chapters
 (`pdf_chapters`); and write sections (`pdf_sections`, with subheadings from
 `pdf_headings` and line-end hyphens decided by `pdf_hyphens`).
+
+A scanned PDF, pictures of pages with almost no text, raises ScannedPdfError. With
+pdf.auto_ocr on, `extract_book` then reads it again with `extract_scanned`: OCR finds its
+text (dogear.ocr), and the same steps run on that.
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ from pypdf.generic import Destination
 
 from dogear.config import Config
 from dogear.document import Book, Metadata
-from dogear.errors import ConfigError, ExtractionError, ScannedPdfError
+from dogear.errors import ConfigError, ExtractionError, ScannedPdfError, ToolNotFoundError
 from dogear.extract.pdf_chapters import (
     Boundary,
     ChapterSource,
@@ -47,10 +51,16 @@ from dogear.extract.pdf_notes import find_notes, link_note_refs, note_lines
 from dogear.extract.pdf_page import ReadSettings, read_page
 from dogear.extract.pdf_sections import build_sections
 from dogear.extract.pdf_text import Layout, Line, Page, measure_layout
+from dogear.ocr.cache import discard, text_layer
+from dogear.render.progress import Report
 
 log = logging.getLogger(__name__)
 
 OCR_HINT = "Run `dogear ocr <file>` first to add a text layer, then open the new file."
+AUTO_OCR_OFF = (
+    "Or, to have Dogear stop at scanned PDFs instead, set auto_ocr = false under [pdf] in "
+    "your settings file."
+)
 _DAMAGED_HINT = (
     "Check that the file opens in a PDF reader. If it does, save a new copy from there "
     "and open that copy instead."
@@ -142,14 +152,23 @@ class _Catalog:
     labels: list[str]
 
 
-def extract(path: Path, config: Config) -> Book:
+def extract(path: Path, config: Config, *, text_layer: Path | None = None) -> Book:
+    """The book in the PDF at `path`. With `text_layer`, its text is read from that PDF
+    instead, page for page: the text OCR found in a scanned `path`. The title, bookmarks,
+    and page numbers still come from `path`."""
     settings = PdfSettings.from_config(config)
     catalog = _read_catalog(path)
     read = ReadSettings(
         settings.column_gap_ratio, settings.image_min_page_share, settings.note_marker_rise_ratio
     )
-    pages = _read_pages(path, catalog.labels, read)
-    _require_text_layer(path, pages, settings.min_chars_per_page)
+    if text_layer is None:
+        pages = _read_pages(path, path.name, catalog.labels, read)
+    else:
+        pages = _read_ocr_pages(text_layer, path.name, catalog.labels, read)
+    if text_layer is None:
+        _require_text_layer(path, pages, settings.min_chars_per_page)
+    else:
+        _require_ocr_text(path, pages, settings.min_chars_per_page)
     layout = _measure(pages, settings)
     pages = strip_furniture(
         pages,
@@ -184,6 +203,18 @@ def extract(path: Path, config: Config) -> Book:
     )
     log.info("Read %d pages and %d sections from %s", len(pages), len(sections), path.name)
     return Book(metadata=catalog.metadata, sections=sections, source_path=path, source_format="pdf")
+
+
+def extract_scanned(path: Path, config: Config, report: Report) -> Book:
+    """The book in a scanned PDF, read with OCR (ocr/cache.py) first."""
+    try:
+        layer = text_layer(path, config, report)
+    except ToolNotFoundError as e:
+        raise ToolNotFoundError(
+            f"This PDF is scanned, and reading it needs Tesseract OCR. {e.message}",
+            hint=f"{e.hint} {AUTO_OCR_OFF}",
+        ) from None
+    return extract(path, config, text_layer=layer)
 
 
 def _all_lines(page: Page) -> list[Line]:
@@ -308,33 +339,74 @@ def _resolve(value: Any) -> Any:
     return value.get_object() if hasattr(value, "get_object") else value
 
 
-def _read_pages(path: Path, labels: list[str], settings: ReadSettings) -> list[Page]:
+def _read_pages(path: Path, name: str, labels: list[str], settings: ReadSettings) -> list[Page]:
+    """The pages of the PDF at `path`, the book `name`."""
     try:
-        with pdfplumber.open(path) as pdf:
-            if len(pdf.pages) != len(labels):
-                log.warning(
-                    "pypdf and pdfplumber disagree on the page count of %s (%d vs %d); "
-                    "page labels may be off",
-                    path.name,
-                    len(labels),
-                    len(pdf.pages),
-                )
-            pages = []
-            for index, plumber_page in enumerate(pdf.pages):
-                label = labels[index] if index < len(labels) else str(index + 1)
-                pages.append(read_page(plumber_page, index, label, settings))
-                plumber_page.close()  # frees the parsed page; big books stay small in memory
-            return pages
+        return _pages(path, name, labels, settings)
     except (PdfminerException, PSException) as e:
         raise ExtractionError(
-            f"Can't read the text in {path.name}: it is damaged ({e}).", hint=_DAMAGED_HINT
+            f"Can't read the text in {name}: it is damaged ({e}).", hint=_DAMAGED_HINT
         ) from e
 
 
-def _require_text_layer(path: Path, pages: list[Page], min_chars: float) -> None:
+def _read_ocr_pages(
+    layer: Path, name: str, labels: list[str], settings: ReadSettings
+) -> list[Page]:
+    """The pages of `layer`, the text OCR found in the book `name`. One that can't be read
+    was damaged in Dogear's cache folder, not in the book: it is deleted, so the next run
+    reads the book with OCR again."""
+    try:
+        return _pages(layer, name, labels, settings)
+    except (PdfminerException, PSException) as e:
+        again = (
+            "Run the same command again: Dogear reads the PDF with OCR again."
+            if discard(layer)
+            else "Run the same command again once the other Dogear reading it has finished."
+        )
+        raise ExtractionError(
+            f"The text Dogear read from {name} with OCR was damaged in its cache folder ({e}).",
+            hint=f"The damage is in Dogear's own copy of the text, not in {name}. {again}",
+        ) from e
+
+
+def _pages(path: Path, name: str, labels: list[str], settings: ReadSettings) -> list[Page]:
+    """The pages of the PDF at `path`, which is the book `name` or its text layer. Raises
+    pdfminer's errors for a damaged file."""
+    with pdfplumber.open(path) as pdf:
+        if len(pdf.pages) != len(labels):
+            log.warning(
+                "pypdf and pdfplumber disagree on the page count of %s (%d vs %d); "
+                "page labels may be off",
+                name,
+                len(labels),
+                len(pdf.pages),
+            )
+        pages = []
+        for index, plumber_page in enumerate(pdf.pages):
+            label = labels[index] if index < len(labels) else str(index + 1)
+            pages.append(read_page(plumber_page, index, label, settings))
+            plumber_page.close()  # frees the parsed page; big books stay small in memory
+        return pages
+
+
+def _chars_per_page(path: Path, pages: list[Page]) -> float:
     if not pages:
         raise ExtractionError(f"{path.name} has no pages.", hint=_DAMAGED_HINT)
-    average = sum(page.char_count for page in pages) / len(pages)
+    return sum(page.char_count for page in pages) / len(pages)
+
+
+def _require_ocr_text(path: Path, pages: list[Page], min_chars: float) -> None:
+    average = _chars_per_page(path, pages)
+    if average < min_chars or average == 0:
+        raise ExtractionError(
+            "Dogear read this scanned PDF with OCR, but found almost no text (about "
+            f"{average:.0f} characters a page).",
+            hint="Check that its pages are clear pictures of printed text, the right way up.",
+        )
+
+
+def _require_text_layer(path: Path, pages: list[Page], min_chars: float) -> None:
+    average = _chars_per_page(path, pages)
     if average < min_chars or average == 0:
         raise ScannedPdfError(
             f"{path.name} has almost no text (about {average:.0f} characters a page), so it "

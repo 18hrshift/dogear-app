@@ -15,6 +15,12 @@ heading_size_ratio = 1.4
 subheading_size_ratio = 1.15
 # If pages average fewer text characters than this, the PDF is treated as scanned.
 min_chars_per_page = 25
+# true: a scanned PDF is read with OCR first, with Tesseract on this computer (see [ocr]),
+# which takes a while: often a few seconds a page. The pages read are kept in the cache
+# folder ([render] cache_dir), so stopping part way loses nothing, and reading the same
+# file again needs no OCR. Tesseract must be installed: Dogear's installers don't include
+# it, and the Docker image does. false: Dogear stops at a scanned PDF and says so.
+auto_ocr = true
 # A page's top or bottom line is a running header or footer (and removed) when the same
 # text, ignoring digits and case, opens or closes at least this many pages...
 running_line_min_pages = 3
@@ -67,9 +73,53 @@ max_member_mb = 64
 # section per file.
 toc_depth = 2
 
+# HTML, Markdown, and Word books have no table of contents, so each is cut into sections
+# at its top heading level: the highest level used more than once. A title heading used
+# once above the chapters gets a short section of its own, and each chapter gets one.
+
+[docx]
+# Largest size, in megabytes, that one part of a Word document may unpack to (zip-bomb
+# guard). The text of a long novel is under 5 MB.
+max_member_mb = 64
+
+[html]
+# Largest HTML file Dogear reads, in megabytes. A long novel is under 5 MB of HTML.
+# Reading HTML takes about 50 times the file's size in memory (16 MB took about 870 MB),
+# so a larger limit could exhaust an ordinary computer's memory.
+max_file_mb = 16
+
+[markdown]
+# Largest Markdown file Dogear reads, in megabytes. A long novel is under 3 MB.
+max_file_mb = 32
+# Most lines a Markdown file may have: reading one takes memory for each line, even a
+# blank one. A 3 MB novel hard-wrapped at 72 characters has under 60,000.
+max_lines = 500000
+# Most pieces a Markdown file may be read into, each paragraph, heading, list item,
+# table cell, line break, link, and stretch of text or emphasis being one or a few. The
+# same 3 MB novel is about 120,000. A table's rows are filled out to its header's width,
+# so without this a small file with a wide table could fill the memory.
+max_pieces = 1000000
+
 [ocr]
+# How scanned PDFs are read with OCR: by itself when [pdf] auto_ocr is true, and by
+# `dogear ocr`. Changing any of these, or updating Tesseract or a language pack, reads a
+# scanned PDF again rather than using the text kept from an earlier read.
+# Each page is drawn as a picture at this resolution for Tesseract. 300 suits print; 70
+# is the least Tesseract takes.
 dpi = 300
-language = "eng"  # Tesseract language code(s), such as "eng" or "eng+fra"
+# Tesseract language code(s), such as "eng" or "eng+fra". Each needs Tesseract's language
+# pack for it; `tesseract --list-langs` lists the ones installed.
+language = "eng"
+# A page whose picture at that resolution would be bigger than this many megapixels is
+# drawn at a lower resolution, so a PDF can't make Dogear fill the computer's memory with
+# one page. A book page at 300 dpi is about 8 megapixels; 100 is a page about 33 inches
+# (85 cm) square.
+max_page_megapixels = 100
+# So is a page whose picture would be wider or taller than this many pixels. 32767 is the
+# most Tesseract reads; at 300 dpi it is a page about 9 feet (2.8 m) long. A page that
+# would have to be drawn at less than 70 dpi, the least Tesseract reads, to fit both
+# limits isn't read at all: Dogear stops and says which page it is.
+max_page_side_pixels = 32767
 
 [speech]
 # Longest piece of text sent to a voice engine at once. Longer sentences are split at
@@ -129,7 +179,9 @@ roman_numeral_keywords = [
 "fig." = "figure"
 "Fig." = "figure"
 
-# The rest of [speech] is English only, and leaves other languages' text as written.
+# Every table in [speech], above and below, is English only: Dogear spells out numbers,
+# abbreviations, and symbols in English text only, and leaves other languages' text for
+# their voices to read as written.
 
 # What follows a clock time ("3:30 pm", "10 a.m."), matched in any case, and how to say it.
 [speech.time_suffixes]
@@ -256,19 +308,65 @@ ebook_convert = ""
 espeak_ng = ""
 
 [voice]
-engine = "kokoro"  # the only engine so far
-voice = "af_heart"  # run `dogear voices` to list them
+# The voice engine, and one of its voices. `dogear voices` lists every installed engine
+# and its voices. Kokoro comes with Dogear; others are installed as plugins.
+engine = "kokoro"
+voice = "af_heart"
 # Speaking pace: 1.0 is the voice's natural pace. Kokoro at 1.0 read a test chapter at
 # about 190 words a minute; audiobook narrators average nearer 155, so the default is a
 # little slower. Players can change speed too.
 speed = 0.9
+# Some voice engines are speech services on another computer, such as one on the
+# internet (cloud voices): the text they speak is sent there, sentence by sentence, and
+# the service's own terms apply. Dogear uses such a voice only when this is true, or with
+# --allow-cloud for one run, and it says where the text goes before sending any. The web
+# page lists them only when this is true. A server on this computer doesn't count.
+allow_cloud = false
 
-[kokoro]
-# Which build of the Kokoro model to use. "full" (325 MB) sounds best. "quantized" (92 MB)
-# rendered about 25% faster on a test laptop CPU, at slightly lower quality.
-model = "full"
-# CPU threads to use while speaking. 0 means all of them.
-threads = 0
+# The voice above is the book's main voice. A passage in another language (one the book
+# marks, or one [language_detection] finds) is read by the voice [voice.languages] gives
+# that language. This decides a language that table doesn't list and the main voice
+# doesn't speak:
+#   "main": the main voice reads it anyway, as an English voice reading a French phrase.
+#   "best": the best installed voice for the language reads it, if there is one: the
+#           main voice's engine first, then the others as `dogear voices` lists them,
+#           each engine's voices best first, but never a voice that sends text off this
+#           computer (name one below to use it). Without one, the main voice reads it.
+# "main" is the default. Only the Piper plugin has voices in other languages so far, and
+# it isn't installed with Dogear. A change of voice in the middle of a chapter is
+# jarring, the voices of another engine sound different, and books are sometimes marked
+# with the wrong language: a stray change of voice is worse than an English voice
+# reading a French phrase. Choose a voice per language below, or "best", to change it.
+other_languages = "main"
+
+# The voice for each language, as engine:voice, such as fr = "piper:fr_FR-mls-medium".
+# A language is a BCP 47 tag: "fr" is every kind of French, and "fr-CA" Canadian French
+# only. The most specific one that matches a passage wins. Each voice must speak the
+# language it is given (its own language's first part, such as fr, must match). Empty
+# by default: every passage is read by the main voice.
+[voice.languages]
+
+[language_detection]
+# Many books don't mark the passages in another language. With this on, Dogear guesses
+# them, on this computer, with a small language identifier (py3langid). It looks only
+# for languages it has a voice to read (in [voice.languages], the main voice's, and with
+# other_languages = "best" every installed voice's), and never changes a language the
+# book marks on a passage or on its chapter. Off by default: a wrong guess changes the
+# voice in the middle of a chapter, and books that mark their languages need no guessing.
+enabled = false
+# Each paragraph, list, note, table, and heading is checked as a whole, if it has at
+# least this many letters. Shorter text ("Oui, monsieur.") is too easily mistaken.
+min_letters = 30
+# A guess is used only when the identifier is at least this sure of it, from 0 to 1. On
+# Jekyll and Hyde, nothing of 30 letters or more was guessed to be in another language;
+# French sentences of 39 to 66 letters came out French at 0.99 or more.
+min_confidence = 0.9
+# A paragraph or note with at least this many letters is also checked a sentence at a
+# time, so a quotation inside it is found. Each sentence needs min_letters as well.
+sentence_check_min_letters = 300
+
+# Each voice engine has a settings table of its own, named after it, such as [kokoro].
+# Its defaults come with the engine: Kokoro's are in voice/kokoro.toml, next to this file.
 
 [models]
 # Where downloaded voice files are kept. Empty means the usual per-user data folder.
@@ -306,7 +404,11 @@ scene_break_ms = 1800
 section_start_ms = 500  # before the first words of each track
 section_end_ms = 2000  # after the last words of each track
 
-# Words Dogear adds when it reads structure aloud.
+# Words Dogear adds when it reads structure aloud, in English. Passages and books in
+# another language use that language's table below (the most specific match, so "fr"
+# covers fr-CA), or these English words when it has none, which `dogear make` says.
+# To add a language, add a table named after it, such as [narration.words.it]; a word it
+# leaves out is said in English.
 [narration.words]
 image = "Image"
 note = "Note"
@@ -318,9 +420,43 @@ table_skipped = "Table not read."
 by = "By"  # the title track: "By Robert Louis Stevenson."
 and = "and"  # "By Ann Smith and Bob Jones."
 
+[narration.words.fr]
+image = "Image"
+note = "Note"
+notes = "Notes"
+table = "Tableau"
+row = "Ligne"
+page = "Page"
+table_skipped = "Tableau non lu."
+by = "Par"
+and = "et"
+
+[narration.words.de]
+image = "Bild"
+note = "Anmerkung"
+notes = "Anmerkungen"
+table = "Tabelle"
+row = "Zeile"
+page = "Seite"
+table_skipped = "Tabelle nicht vorgelesen."
+by = "Von"
+and = "und"
+
+[narration.words.es]
+image = "Imagen"
+note = "Nota"
+notes = "Notas"
+table = "Tabla"
+row = "Fila"
+page = "Página"
+table_skipped = "Tabla no leída."
+by = "Por"
+and = "y"
+
 [render]
-# Where rendered sentences are kept so later runs reuse them. Empty means the usual
-# per-user cache folder. Safe to delete; the next run just takes longer.
+# Where rendered sentences, and the text read from scanned PDFs with OCR, are kept so
+# later runs reuse them. Empty means the usual per-user cache folder. Safe to delete; the
+# next run just takes longer.
 cache_dir = ""
 # Longest gap, in seconds, between progress lines while a long section is being spoken.
 progress_every_seconds = 120
@@ -336,20 +472,37 @@ edge_silence_keep_ms = 60
 # the text and the audio in step, for reading apps such as Thorium Reader), and "daisy"
 # (a DAISY 2.02 talking book, for DAISY players and apps).
 formats = ["m4b"]
+# Before speaking, `dogear make` estimates the disk space the book needs, and stops if a
+# disk doesn't have it: the speech cache and the run's work folder (on the disk that holds
+# render.cache_dir) and what it saves (on the output folder's disk). The estimate is raised
+# by this many percent, for voices and books that come out longer than average, and so a
+# disk is never filled to the last byte. 0 uses the estimate as it is.
+space_margin_percent = 20
 
 [web]
 # `dogear serve`: make books from a web browser, on this computer or (with --lan) from a
 # phone or another computer on the same network.
 # The port the page is served on. --port changes it for one run.
 port = 8765
+# With --lan, also show a link for phones and other computers, with this computer's address
+# on the network as Dogear finds it. Inside a container (Docker), the address it finds is
+# the container's own, which other devices can't reach: set this to false there, and Dogear
+# says to use this computer's network address in place of 127.0.0.1 instead.
+show_network_address = true
 # Largest book file the page accepts, in megabytes. Most EPUB and Kindle books are under
 # 20 MB, and a long PDF with pictures can reach 100 to 200 MB. 200 lets nearly any book
 # in while keeping one upload from filling the disk.
 max_upload_mb = 200
-# Reading a book to list its sections stops after this many seconds. Kindle books are
-# converted with Calibre first, which can take up to kindle.convert_timeout_seconds.
-# The same limit applies to checking a book's words and to saying something for Listen
-# (the first Listen may download the voice).
+# Reading a book to list its sections stops once Dogear has gone this many seconds
+# without reporting any progress, and is then taken to be stuck. The count starts again
+# with each progress line, so a long job that keeps reporting is never cut short: a
+# scanned PDF is read with OCR first, a few seconds a page, and says how far it has got
+# every few pages. A limit on the whole read would stop a long scanned book half way, or
+# be too long to catch a read that is stuck. Kindle books are converted with Calibre
+# first, which reports nothing until it's done and can take up to
+# kindle.convert_timeout_seconds. The same limit applies to checking a book's words and
+# to saying something for Listen (the first Listen may download the voice, which reports
+# as it goes).
 read_timeout_seconds = 900
 # Where uploaded books, everything made from them, and the page's access key are kept.
 # Empty means a folder named web in the usual per-user data folder. Each book has its own
@@ -363,3 +516,7 @@ max_pronunciations = 1000
 max_word_chars = 80
 # ...and each spelling (such as "utter son" for Utterson) at most this many characters.
 max_spelling_chars = 160
+# A book's "Check how words are said" page lists the 50 words the voice doesn't know that
+# come up most often, with a link to the rest: at most this many, most frequent first.
+# Each is a field with a Listen button, so a longer list makes a longer page.
+max_words_listed = 500

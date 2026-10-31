@@ -22,7 +22,7 @@ from dogear.document import (
     SceneBreak,
     Table,
 )
-from dogear.narration import Passage, SectionNarration
+from dogear.narration import Passage, SectionNarration, Utterance
 from dogear.output.chapter import ChapterAudio
 from dogear.readalong.model import (
     BreakText,
@@ -71,9 +71,12 @@ class _SectionBuilder:
         self.targets: dict[int, str] = {}  # utterance index to the id of what shows it
         self.page_utterances: set[int] = set()
         self.page_count = 0
+        self.section_lang: str | None = None  # set by build
+        self.item_lang: str | None = None  # the language of the item being built
 
     def build(self, audio: ChapterAudio, language: str | None) -> SectionText:
         clips = self._clips(audio)
+        self.section_lang = self.narration.section.lang or language
         items = tuple(self._item(p) for p in self.narration.passages)
         syncs = []
         for k, i in enumerate(self.spoken, start=1):
@@ -116,6 +119,7 @@ class _SectionBuilder:
 
     def _item(self, passage: Passage) -> TextItem:
         block, parts = passage.block, passage.parts
+        self.item_lang = getattr(block, "lang", None) or self.section_lang
         match block:
             case Heading(level=level, text=text, lang=lang):
                 [i] = parts[0]
@@ -161,7 +165,17 @@ class _SectionBuilder:
     def _sentences(self, part: range) -> tuple[Sentence, ...]:
         for i in part:
             self.targets[i] = self._id(i)
-        return tuple(Sentence(self._id(i), self.utterances[i].text) for i in part)
+        return tuple(
+            Sentence(self._id(i), self.utterances[i].text, self._own_lang(self.utterances[i]))
+            for i in part
+        )
+
+    def _own_lang(self, utterance: Utterance) -> str | None:
+        """The utterance's language, if it isn't the item's around it."""
+        lang = utterance.lang
+        if not lang or (self.item_lang and lang.lower() == self.item_lang.lower()):
+            return None
+        return lang
 
     def _id(self, utterance: int) -> str:
         return f"{self.prefix}-u{utterance}"

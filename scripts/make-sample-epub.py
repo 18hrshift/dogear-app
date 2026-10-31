@@ -152,8 +152,8 @@ def make_sample(name: str, out: Path, cache: Path) -> Path:
     config["narration"].update(VARIANTS[name])
     book = sample_book(name)
     # The two seams the tests use too: the book comes from here, the voice is a hum.
-    make.extract_book = lambda path, cfg: book
-    make.make_engine = lambda cfg, report: HumVoice()
+    make.extract_book = lambda path, cfg, report: book
+    make.make_voice = lambda cfg, chosen, report: HumVoice()
     folder = out / f".{name}"
     [saved] = make_audiobook(MakeRequest(Path("sample.epub"), folder), config, print)
     target = out / f"{name}.epub"

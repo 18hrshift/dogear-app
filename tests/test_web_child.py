@@ -244,3 +244,53 @@ def test_a_child_that_takes_too_long_is_stopped():
     result = run_captured(command, timeout=0.5, max_stdout=1000)
     assert result.timed_out
     assert result.returncode != 0
+
+
+# Reports a line on stderr every 0.3 seconds, five times, then goes quiet for `argv[1]`
+# seconds before it ends.
+REPORTING = """
+import sys, time
+for n in range(1, 6):
+    print(f"Read {n} of 5 pages with OCR.", file=sys.stderr, flush=True)
+    time.sleep(0.3)
+time.sleep(float(sys.argv[1]))
+print("done")
+"""
+
+
+def test_a_child_that_keeps_reporting_runs_past_the_timeout():
+    """The timeout counts from the child's latest line, so a long job that says how it's
+    going (reading a scanned PDF with OCR) isn't cut short."""
+    heard = []
+    command = [sys.executable, "-c", REPORTING, "0"]
+    result = run_captured(command, timeout=1.0, max_stdout=1000, on_line=heard.append)
+    assert not result.timed_out
+    assert result.returncode == 0
+    assert result.stdout.strip() == b"done"
+    assert heard == [f"Read {n} of 5 pages with OCR." for n in range(1, 6)]
+    assert result.stderr.splitlines() == heard
+
+
+def test_a_child_that_goes_quiet_for_the_timeout_is_stopped():
+    command = [sys.executable, "-c", REPORTING, "30"]
+    started = time.monotonic()
+    result = run_captured(command, timeout=1.0, max_stdout=1000)
+    assert result.timed_out
+    assert time.monotonic() - started < 15
+
+
+def test_only_the_last_stderr_lines_are_kept():
+    script = "import sys\nfor n in range(5000): print(f'line {n}', file=sys.stderr)"
+    result = run_captured([sys.executable, "-c", script], timeout=30, max_stdout=1000)
+    kept = result.stderr.splitlines()
+    assert len(kept) == child.MAX_STDERR_LINES
+    assert kept[-1] == "line 4999"
+
+
+def test_a_bug_in_the_line_handler_is_raised_once_the_child_has_ended():
+    def broken(line):
+        raise RuntimeError("a bug")
+
+    command = [sys.executable, "-c", REPORTING, "0"]
+    with pytest.raises(RuntimeError, match="a bug"):
+        run_captured(command, timeout=30, max_stdout=1000, on_line=broken)

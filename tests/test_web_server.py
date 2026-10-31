@@ -15,6 +15,7 @@ import pytest
 from web_samples import BASE, sample_app, sample_config, visitor
 
 from dogear import cli, paths
+from dogear.config import load_config
 from dogear.errors import ConfigError, DogearError
 from dogear.web import child, server
 from dogear.web.server import ServeOptions, bind, lock_web_folder, serve
@@ -170,6 +171,47 @@ def test_on_the_network_it_listens_everywhere_and_warns(tmp_path, no_server, mon
     )
     assert said[2] == "Anyone on this network who has the link can use Dogear."
     assert no_server.runs == [[("0.0.0.0", port)]]
+
+
+def test_with_the_network_address_off_it_says_to_use_this_computers(
+    tmp_path, no_server, monkeypatch
+):
+    def not_asked():
+        raise AssertionError("the address was looked for")
+
+    monkeypatch.setattr(server, "lan_address", not_asked)
+    config = sample_config(tmp_path)
+    config["web"]["show_network_address"] = False
+    port = free_port()
+    said = []
+    serve(ServeOptions(port=port, lan=True, open_browser=False), config, said.append)
+    assert said[0].startswith(
+        f"Dogear is running. Open this link in a web browser: http://127.0.0.1:{port}/"
+    )
+    assert said[1] == (
+        "On a phone or another computer on the same network, open the link above with this "
+        "computer's network address in place of 127.0.0.1."
+    )
+    assert said[2] == "Anyone on this network who has the link can use Dogear."
+    assert not any("http://" in line for line in said[1:])
+    assert no_server.runs == [[("0.0.0.0", port)]]
+
+
+def test_with_no_address_found_it_says_what_to_use_instead(tmp_path, no_server, monkeypatch):
+    monkeypatch.setattr(server, "lan_address", lambda: None)
+    config = sample_config(tmp_path)
+    said = []
+    serve(ServeOptions(port=free_port(), lan=True, open_browser=False), config, said.append)
+    assert said[1] == (
+        "Dogear couldn't find this computer's address on the network. On a phone or another "
+        "computer on the same network, open the link above with this computer's network "
+        "address in place of 127.0.0.1."
+    )
+
+
+def test_the_docker_image_turns_the_network_address_off():
+    docker = Path(__file__).parents[1] / "docker" / "config.toml"
+    assert load_config(docker)["web"]["show_network_address"] is False
 
 
 def test_a_port_in_use_is_a_plain_error(tmp_path):

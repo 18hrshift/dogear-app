@@ -1,0 +1,5 @@
+# Default settings for the Piper voice engine, the [piper] table. Dogear adds them to its
+# own defaults, and a settings file can change them like any other.
+
+# CPU threads to use while speaking. 0 means all of them.
+threads = 0
