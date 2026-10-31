@@ -326,8 +326,10 @@ and say so instead, set `auto_ocr = false` under `[pdf]`.
 
 `dogear ocr scanned.pdf` saves a copy of a scanned PDF with its words added as a text
 layer over the pictures, as `scanned_ocr.pdf`, for other programs to read as well. `--language` and
-`--dpi` change those settings for one run. Unlike reading a scanned PDF for a book, it
-starts again from the first page if it is stopped.
+`--dpi` change those settings for one run. The saved copy keeps the title, author, book
+language, print-page labels, and internal bookmarks, including their hierarchy. Dogear
+says which part it couldn't keep if that metadata is damaged. Unlike reading a scanned
+PDF for a book, it starts again from the first page if it is stopped.
 
 ### Fix how a word is said
 

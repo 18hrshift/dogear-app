@@ -15,11 +15,12 @@ import os
 import tempfile
 from pathlib import Path
 
-from pypdf import PdfReader, PdfWriter
+from pypdf import PdfWriter
 
 from dogear.book_summary import count
 from dogear.config import Config
 from dogear.errors import DogearError
+from dogear.ocr.metadata import copy_book_metadata
 from dogear.ocr.page import ocr_page, open_pdf
 from dogear.ocr.progress import TAKES_A_WHILE, OcrProgress
 from dogear.ocr.settings import OcrSettings
@@ -54,7 +55,7 @@ def ocr_pdf(input_pdf: Path, output_pdf: Path, config: Config, report: Report) -
                 ocr_page(source, index, page_pdf, tesseract, settings, text_only=False)
                 writer.append(str(page_pdf))
                 progress.page_done()
-            _copy_metadata(input_pdf, writer)
+            copy_book_metadata(input_pdf, writer)
             output_pdf.parent.mkdir(parents=True, exist_ok=True)
             partial = output_pdf.with_name(f"{output_pdf.name}.{os.getpid()}.part")
             with partial.open("wb") as f:
@@ -64,13 +65,3 @@ def ocr_pdf(input_pdf: Path, output_pdf: Path, config: Config, report: Report) -
         source.close()
     log.info("OCR finished: %d pages written to %s", total, output_pdf)
     return total
-
-
-def _copy_metadata(input_pdf: Path, writer: PdfWriter) -> None:
-    try:
-        metadata = PdfReader(str(input_pdf)).metadata
-    except Exception as e:  # metadata is a nicety; a broken info dict shouldn't stop OCR
-        log.warning("Couldn't copy metadata from %s: %s", input_pdf.name, e)
-        return
-    if metadata:
-        writer.add_metadata({k: str(v) for k, v in metadata.items()})

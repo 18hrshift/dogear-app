@@ -149,6 +149,9 @@ Goal: a helper with no Python experience can make a book.
       selected pages resume after a stop and have their own cache. Known limits: scans
       with some searchable text (even just a page number), or made of smaller image tiles,
       need `dogear ocr` first.
+- [x] Keep navigation in the PDF `dogear ocr` saves: internal bookmarks and their hierarchy,
+      print-page labels, and the book's language, alongside its title and author. Damaged
+      metadata is reported by part; usable metadata is still kept.
 
 ## Ground rules for every phase
 
