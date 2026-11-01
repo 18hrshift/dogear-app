@@ -144,11 +144,12 @@ Goal: a helper with no Python experience can make a book.
       word tables yet.
 - [x] More inputs: DOCX, HTML, Markdown, MOBI/AZW3 via Calibre, automatic OCR for scanned PDFs.
       The installers don't include Tesseract (the Docker image does).
-- [x] Read mixed searchable and scanned PDFs: OCR only textless pages with a page-sized
-      raster image, preserving searchable pages, bookmarks, and print-page labels. The
+- [x] Read mixed searchable and scanned PDFs: OCR only textless pages whose raster images
+      cover most of the page, preserving searchable pages, bookmarks, and print-page labels. The
       selected pages resume after a stop and have their own cache. Known limits: scans
-      with some searchable text (even just a page number), or made of smaller image tiles,
-      need `dogear ocr` first.
+      with some searchable text (even just a page number) need `dogear ocr` first.
+- [x] Detect scanned pages stored as multiple image tiles, measuring their combined
+      raster coverage without counting overlaps twice or filling gaps between pictures.
 - [x] Keep navigation in the PDF `dogear ocr` saves: internal bookmarks and their hierarchy,
       print-page labels, and the book's language, alongside its title and author. Damaged
       metadata is reported by part; usable metadata is still kept.

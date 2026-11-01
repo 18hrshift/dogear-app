@@ -6,9 +6,11 @@ import copy
 
 import pytest
 from conftest import require_tool
-from pdf_builder import PdfBuilder, alice, novel, scanned, scanned_words
+from pdf_builder import PdfBuilder, alice, novel, scanned, scanned_words, tiled_scan
 from pdfplumber.utils.exceptions import PdfminerException
+from PIL import Image as PillowImage
 from pypdf import PdfReader, PdfWriter
+from reportlab.pdfgen.canvas import Canvas
 from test_ocr_cache import TESSERACT, FakeOcr
 
 from dogear import cli
@@ -49,8 +51,8 @@ def fast_settings(tmp_path):
     return path
 
 
-@pytest.fixture
-def mixed_pdf(tmp_path):
+@pytest.fixture(params=[False, True], ids=["single-image", "tiled-scan"])
+def mixed_pdf(tmp_path, request):
     native = PdfBuilder(tmp_path / "native.pdf")
     native.heading("Opening")
     native.paragraph(alice(1)[0])
@@ -59,6 +61,8 @@ def mixed_pdf(tmp_path):
     native.paragraph(alice(2)[1])
     native.save()
     pictures = scanned_words(tmp_path / "pictures.pdf", ["MIDDLE", "MORE"], dpi=100)
+    if request.param:
+        pictures = tiled_scan(pictures, tmp_path / "tiled.pdf")
     text = PdfReader(native.path)
     scan = PdfReader(pictures)
     writer = PdfWriter()
@@ -160,6 +164,28 @@ def test_smaller_illustrations_are_not_ocrd_unless_the_setting_changes(tmp_path,
     config["pdf"]["scanned_image_min_page_share"] = 0.3
     assert extract_book(path, config).sections
     assert fake.read == [1]
+
+
+@pytest.mark.parametrize("overlap", [True, False], ids=["repeated-image", "L-shape"])
+def test_image_overlaps_and_the_empty_space_between_them_do_not_trigger_ocr(
+    tmp_path, config, fake, overlap
+):
+    path = tmp_path / "illustrations.pdf"
+    canvas = Canvas(str(path), pagesize=(612, 792))
+    canvas.drawString(72, 700, "This page has searchable text that must stay as it is.")
+    canvas.drawString(72, 680, "There is enough native text to read without any OCR.")
+    canvas.showPage()
+    picture = PillowImage.new("L", (8, 8), 128)
+    if overlap:
+        for _ in range(5):
+            canvas.drawInlineImage(picture, 0, 0, 306, 396)
+    else:
+        canvas.drawInlineImage(picture, 0, 0, 612, 79.2)
+        canvas.drawInlineImage(picture, 0, 0, 61.2, 792)
+    canvas.showPage()
+    canvas.save()
+    assert extract_book(path, config).sections
+    assert fake.read == []
 
 
 def test_real_ocr_reads_only_the_scanned_pages(mixed_pdf, config, monkeypatch):

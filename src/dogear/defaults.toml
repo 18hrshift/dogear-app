@@ -15,8 +15,9 @@ heading_size_ratio = 1.4
 subheading_size_ratio = 1.15
 # If pages average fewer text characters than this, the PDF is treated as scanned.
 min_chars_per_page = 25
-# In a PDF with searchable text, also OCR pages with no text whose largest image
-# covers at least this share of the page. Smaller illustrations keep their image blocks.
+# In a PDF with searchable text, also OCR pages with no text whose raster images
+# together cover at least this share of the page, counting overlaps once. Gaps don't
+# count. Smaller illustrations keep their image blocks.
 scanned_image_min_page_share = 0.8
 # true: a scanned PDF is read with OCR first, with Tesseract on this computer (see [ocr]),
 # which takes a while: often a few seconds a page. The pages read are kept in the cache

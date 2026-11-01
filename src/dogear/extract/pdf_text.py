@@ -157,7 +157,7 @@ class Page:
     has_images: bool = False  # any image at all, even a tiny one
     figures: tuple[Figure, ...] = ()
     notes: tuple[PageNote, ...] = ()  # footnotes printed at its foot
-    image_page_share: float = 0  # largest raster image's share of the page, clipped to it
+    image_page_share: float = 0  # raster images' combined page share; overlaps count once
 
     @property
     def char_count(self) -> int:

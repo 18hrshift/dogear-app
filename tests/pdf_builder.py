@@ -321,6 +321,38 @@ def scanned_words(path: Path, pages: Sequence[str], *, dpi: int = 150) -> Path:
     return scanned(source, path, dpi=dpi)
 
 
+def tiled_scan(source: Path, path: Path, *, dpi: int = 100) -> Path:
+    """Each page of `source` as four separate raster images, as some scanners save it."""
+    import pypdfium2
+
+    canvas = Canvas(str(path))
+    with pypdfium2.PdfDocument(str(source)) as document:
+        for index in range(len(document)):
+            page = document[index]
+            try:
+                width, height = page.get_size()
+                picture = page.render(scale=dpi / 72).to_pil()
+                canvas.setPageSize((width, height))
+                xs = [0, picture.width // 2, picture.width]
+                ys = [0, picture.height // 2, picture.height]
+                for row in range(2):
+                    for column in range(2):
+                        x0, x1 = xs[column : column + 2]
+                        top, bottom = ys[row : row + 2]
+                        canvas.drawInlineImage(
+                            picture.crop((x0, top, x1, bottom)),
+                            width * x0 / picture.width,
+                            height * (1 - bottom / picture.height),
+                            width * (x1 - x0) / picture.width,
+                            height * (bottom - top) / picture.height,
+                        )
+                canvas.showPage()
+            finally:
+                page.close()
+    canvas.save()
+    return path
+
+
 def alice(count: int, start: int = 0) -> list[str]:
     """`count` paragraphs of sample prose, cycling through the passage."""
     return [ALICE[(start + i) % len(ALICE)] for i in range(count)]
