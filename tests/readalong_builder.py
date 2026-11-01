@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dogear.config import Config
 from dogear.document import Book, Metadata, Section
+from dogear.language_detection import LanguageGuesser
 from dogear.narration import narrate_book, narrate_title
 from dogear.output.chapter import ChapterAudio
 from dogear.readalong import build_readalong
@@ -26,11 +27,12 @@ def talking_book(
     *sections: Section,
     title_track: bool = True,
     book_metadata: Metadata | None = None,
+    guesser: LanguageGuesser | None = None,
 ) -> tuple[list[SectionText], Metadata]:
     """The read-along sections of a book made of `sections`, and its metadata. Their audio
     is one stand-in .mp3 file in `folder`: the packagers copy it without decoding it."""
     book = Book(book_metadata or metadata(), list(sections), Path("b.epub"), "epub")
-    narrations = narrate_book(book, config)
+    narrations = narrate_book(book, config, guesser)
     if title_track:
         narrations.insert(0, narrate_title(book, config))
     audio = folder / "stand-in.mp3"

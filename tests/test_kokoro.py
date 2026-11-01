@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from kokoro_fakes import STYLE_WIDTH, use_fake_session, write_tokenizer, write_voice
 
-from dogear.errors import PronunciationError
+from dogear.errors import PronunciationError, VoiceError
 from dogear.pronunciations import load_dictionary
 from dogear.voice.kokoro import KokoroEngine, check_phonemes, load_vocab, split_phonemes
 
@@ -255,3 +255,35 @@ def test_an_apostrophe_for_stress_gets_a_tip(tmp_path):
     with pytest.raises(PronunciationError, match="'\\'' \\(apostrophe\\)") as err:
         check_phonemes(words, VOCAB)
     assert "Stress is written ˈ (U+02C8)" in err.value.hint
+
+
+# Damaged voice files
+
+
+def test_a_model_onnxruntime_cant_load_says_to_check_the_voice_files(make, monkeypatch, tmp_path):
+    monkeypatch.undo()  # the real onnxruntime, given a file that isn't a model
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"not a model")
+    with pytest.raises(VoiceError) as error:
+        make(model=model)
+    assert error.value.message == (
+        f"The voice can't use {model}: onnxruntime couldn't load it. The file may be damaged."
+    )
+    assert "dogear download --check" in error.value.hint
+
+
+def test_a_voice_file_of_the_wrong_size_says_to_check_the_voice_files(make, tmp_path):
+    voice = tmp_path / "short.bin"
+    voice.write_bytes(b"\0" * (4 * STYLE_WIDTH + 2))
+    with pytest.raises(VoiceError, match="isn't the size a voice file is") as error:
+        make(voice=voice)
+    assert "dogear download --check" in error.value.hint
+
+
+@pytest.mark.parametrize("text", ["{not json", '{"model": {}}', "[]", "\udcff"])
+def test_a_tokenizer_that_cant_be_read_says_to_check_the_voice_files(tmp_path, text):
+    path = tmp_path / "tokenizer.json"
+    path.write_text(text, encoding="utf-8", errors="surrogateescape")
+    with pytest.raises(VoiceError, match="isn't the tokenizer Kokoro has") as error:
+        load_vocab(path)
+    assert "dogear download --check" in error.value.hint

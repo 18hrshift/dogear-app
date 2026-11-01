@@ -17,19 +17,27 @@ class Status:
 
 def describe(record: BookRecord, ahead: int | None, latest: str = "") -> Status:
     """`ahead`: how many books will be made before this one, if it is waiting. `latest`:
-    the latest progress line of the book being made (progress.Progress.latest)."""
+    the latest progress line of the book being read or made (progress.Progress.latest),
+    such as how far reading a scanned PDF with OCR has got."""
     match record.state:
         case "reading":
             return Status(
                 "Reading",
                 f"Reading {record.title}",
-                "Reading the book to find its sections. This usually takes less than a minute.",
+                latest
+                or "Reading the book to find its sections. This usually takes less than a minute.",
             )
         case "unreadable":
             return Status(
                 "Couldn't read",
                 "Dogear couldn't read this book",
                 "Dogear couldn't read this book.",
+            )
+        case "read_stopped":
+            return Status(
+                "Stopped",
+                "Reading this book stopped",
+                "Stopped. Choose Read again to carry on.",
             )
         case "ready":
             return Status(

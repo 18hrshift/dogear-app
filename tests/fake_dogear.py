@@ -8,6 +8,8 @@ What it does depends on the first word of the book file:
     fail        make fails with `Error:` and `What to do:` lines
     slow        make prints a line, then waits (for a test to stop it)
     slowread    outline waits (for a test to stop it), then lists three sections
+    scanread    outline reports reading SCAN_PAGES pages with OCR, one every SCAN_SECONDS,
+                then lists three sections
     slowwords   words waits (for a test to stop it)
     crash       make fails with a traceback and no `Error:` line
     manywords   words lists 60 words
@@ -38,6 +40,12 @@ from dogear.web.server_watch import stop_with_server_when_asked
 TITLE = "Fake Book"
 SECTIONS = ["Title Page", "One", "Two"]
 WORDS = [("Utterson", 131), ("Lanyon", 40), ("Poole", 12)]
+SCAN_PAGES = 6
+SCAN_SECONDS = 0.4
+SCAN_START = (
+    "This PDF is scanned, so Dogear is reading its 6 pages with OCR, which takes a while: "
+    "often a few seconds a page."
+)
 
 
 def main(argv: list[str]) -> int:
@@ -59,6 +67,8 @@ def main(argv: list[str]) -> int:
             return fail()
         if behaviour == "slowread" and not wait_to_be_stopped():
             return 130
+        if behaviour == "scanread":
+            read_with_ocr()
         print(json.dumps(summary()))
         return 0
     if command == "words":
@@ -76,6 +86,14 @@ def wait_to_be_stopped() -> bool:
         print("Stopped.", file=sys.stderr)
         return False
     return True
+
+
+def read_with_ocr() -> None:
+    """What `dogear outline` reports while it reads a scanned PDF with OCR."""
+    print(SCAN_START, file=sys.stderr, flush=True)
+    for page in range(1, SCAN_PAGES + 1):
+        time.sleep(SCAN_SECONDS)
+        print(f"Read {page} of {SCAN_PAGES} pages with OCR.", file=sys.stderr, flush=True)
 
 
 def word_files(argv: list[str]) -> list[Path]:
@@ -176,7 +194,7 @@ def make(argv: list[str], behaviour: str) -> int:
         except KeyboardInterrupt:  # the goodbye `dogear make` gives in a terminal
             print("Stopped.", file=sys.stderr)
             print(
-                "Sentences spoken so far are saved. Run the same command again to continue.",
+                "What was done so far is saved. Run the same command again to carry on.",
                 file=sys.stderr,
             )
             return 130

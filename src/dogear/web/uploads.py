@@ -20,14 +20,13 @@ from python_multipart.exceptions import FormParserError
 from python_multipart.multipart import parse_options_header
 from starlette.requests import ClientDisconnect, Request
 
-from dogear.extract import EXTRACTORS
+from dogear.extract import EXTRACTORS, format_names
 from dogear.web.private import private_folder
 
 FIELD = "book"
 # Room for the form's own boundaries and headers on top of the file.
 FORM_OVERHEAD_BYTES = 64 * 1024
 NOT_A_FORM = "The upload wasn't a form Dogear understands. Try again."
-ACCEPT = ",".join(sorted(EXTRACTORS))  # ".azw,.azw3,.epub,.mobi,.pdf", for <input accept>
 
 
 # Status codes for a book that couldn't be written to disk.
@@ -128,7 +127,7 @@ def check_name(name: str) -> str:
     if extension not in EXTRACTORS:
         raise UploadError(
             f"Dogear can't read {extension or 'files without an extension'} files. "
-            "Choose an EPUB, PDF, MOBI, or AZW3 file."
+            f"Choose an {format_names('or')} file."
         )
     return extension
 

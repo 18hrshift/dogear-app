@@ -1,0 +1,52 @@
+# Default settings for the OpenAI-compatible speech engine, the [openai_speech] table.
+# Dogear adds them to its own defaults, and a settings file can change them like any other.
+
+# The service's address: Dogear sends each sentence to <base_url>/audio/speech. A server on
+# this computer, at localhost, 127.0.0.1, or [::1] (such as "http://localhost:8880/v1"),
+# keeps the text here. Any other address is sent the text it speaks, so Dogear uses it only
+# if you allow it ([voice] allow_cloud, or --allow-cloud), and says so first.
+base_url = "https://api.openai.com/v1"
+# The speech model to ask for, as the service names it. OpenAI says its speech models,
+# gpt-4o-mini-tts among them, shut down on January 6, 2027.
+model = "gpt-4o-mini-tts"
+# The voices to offer, best first, as the service names them. These are OpenAI's; another
+# service has its own.
+voices = [
+    "marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx",
+    "sage", "shimmer", "verse",
+]
+# The language the voices speak, as a BCP 47 tag, and in words.
+language = "en-US"
+language_name = "American English"
+# The name of the environment variable that holds the service's key, such as
+# "OPENAI_API_KEY". The key goes there, never in a settings file. A server on this computer
+# usually needs none: leave the variable unset. "" sends no key to any service.
+api_key_env = "OPENAI_API_KEY"
+# Directions on how to speak, for a model that takes them (gpt-4o-mini-tts does), such as
+# "Read calmly, like an audiobook narrator." "" for none. Changing them speaks the book
+# again.
+instructions = ""
+# How the audio comes back: "wav", or "pcm" (16-bit samples, one channel, no header) for
+# a service that can't send WAV.
+response_format = "wav"
+# The audio's sample rate in Hz: 24000 for OpenAI and for Kokoro servers, 22050 for most
+# Piper voices. Dogear checks every WAV it gets against it.
+sample_rate = 24000
+# The most characters the service takes at once: 4096 for OpenAI. Dogear sends a sentence at
+# a time, at most [speech] max_sentence_chars long, and stops before sending any if that is
+# more than this.
+max_input_chars = 4096
+# About how many words a minute the voices say at speed 1.0. Only the disk-space estimate
+# uses it.
+words_per_minute = 150
+# Seconds to wait for each answer.
+timeout_seconds = 60
+# How many times to try a sentence again after a failure that may pass (asked to slow down,
+# a server error, or a lost connection), waiting retry_wait_seconds the first time and twice
+# as long each time after. When the service says how long to wait, that is waited instead,
+# up to two minutes.
+retries = 4
+retry_wait_seconds = 2.0
+# The most requests to send in a minute. 0 for no limit, as a server on this computer
+# usually needs.
+requests_per_minute = 50

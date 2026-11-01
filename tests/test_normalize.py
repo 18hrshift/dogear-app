@@ -91,13 +91,15 @@ def test_number_range_with_en_dash(say):
     assert say("pages 3–4") == "pages three to four"
 
 
-def test_other_languages_use_their_number_words(say):
-    assert say("Il a 42 ans.", lang="fr") == "Il a quarante-deux ans."
-
-
-def test_unsupported_language_leaves_digits(say, caplog):
+def test_other_languages_keep_their_numbers_for_their_voice(say):
+    # "1,5" is one and a half in French: an English reading would get it wrong.
+    assert say("Il a 42 ans et 1,5 kilo.", lang="fr") == "Il a 42 ans et 1,5 kilo."
     assert say("42", lang="xx") == "42"
-    assert "can't be spelled out" in caplog.text
+
+
+def test_a_range_in_another_language_is_left_to_its_voice(say):
+    assert say("de 1990–1995", lang="fr") == "de 1990-1995"
+    assert say("Il dit—doucement.", lang="fr") == "Il dit, doucement."
 
 
 # Punctuation and leftovers.
@@ -477,12 +479,26 @@ def test_body_text_does_not_read_a_bare_numeral(say):
 
 
 # Languages.
-def test_new_rules_are_english_only(say, heading):
-    assert say("$5", lang="fr") == "$cinq"
-    assert say("5 km", lang="de") == "fünf km"
-    assert say("3:30 pm", lang="fr") == "trois:trente pm"
+def test_every_rewrite_is_english_only(say, heading):
+    assert say("$5", lang="fr") == "$5"
+    assert say("5 km", lang="de") == "5 km"
+    assert say("3:30 pm", lang="fr") == "3:30 pm"
     assert say("Chapitre IV", lang="fr") == "Chapitre IV"
     assert heading("IV", lang="fr") == "IV"
+    assert say("Dr. Martin, etc.", lang="fr") == "Dr. Martin, etc."
+
+
+def test_pronunciation_entries_apply_to_their_own_languages(config, tmp_path):
+    words = tmp_path / "words.toml"
+    words.write_text(
+        '[words]\nUtterson = "utter son"\nMme = { sounds_like = "madame", languages = ["fr"] }\n',
+        encoding="utf-8",
+    )
+    config["pronunciation"]["files"] = [str(words)]
+    rules = SpeechRules.from_config(config)
+    assert normalize_for_speech("Mme Utterson.", rules, "en") == "Mme Utter son."
+    assert normalize_for_speech("Mme Utterson.", rules, "fr-FR") == "Madame Utterson."
+    assert normalize_for_speech("Mme Utterson.", rules, "de") == "Mme Utterson."
 
 
 def test_english_rules_cover_regional_and_unknown_languages(say, heading):

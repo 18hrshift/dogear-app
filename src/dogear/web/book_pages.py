@@ -11,18 +11,22 @@ from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Re
 from dogear.book_summary import count, describe_section
 from dogear.config import Config
 from dogear.errors import DogearError
+from dogear.extract import format_names
+from dogear.voice.cloud import CloudVoice, hosts_in_words, run_warning
+from dogear.voice.engines import find_voice
 from dogear.web import choices
 from dogear.web.books import ID_PATTERN, MADE, BookRecord
 from dogear.web.downloads import NotAvailable, downloads, media_type, output_path
-from dogear.web.forms import FormTooBig, read_form
+from dogear.web.forms import FormTooBig, first, read_form
 from dogear.web.library import CAN_CHOOSE, Library
 from dogear.web.progress import LEFT_OUT_MANY, LEFT_OUT_ONE, MAX_KEPT, left_out_sentence
 from dogear.web.settings import WebSettings
 from dogear.web.status import Status, describe
 from dogear.web.templating import message, render
-from dogear.web.uploads import ACCEPT, UploadError, disk_problem, receive_book
+from dogear.web.uploads import UploadError, disk_problem, receive_book
 
 DELETED = "The book was deleted."
+SEND = "send"  # the choose form's answer to "Send this book's text?": yes, or no
 STATUS_LINES = 20  # the latest progress lines sent with each status update
 # Pages for these states keep checking for news (with JavaScript) while the book stays
 # in one of the states listed.
@@ -62,10 +66,10 @@ def _home(
         "Your books",
         status_code=status_code,
         errors=errors,
+        book_formats=format_names("or"),
         current="books",
         books=books,
         notice=notice,
-        accept=ACCEPT,
         max_upload=f"{settings.max_upload_bytes // (1024 * 1024):,} MB",
     )
 
@@ -155,6 +159,11 @@ async def choose_submit(request: Request) -> Response:
     picked, chosen, errors = choices.check(fields, record.summary, config)
     if chosen is None:
         return _choose(request, record, picked, errors, status_code=400)
+    clouds = choices.cloud_voices_for_run(chosen.voice, config)
+    if clouds and first(fields, SEND) != "yes":
+        if first(fields, SEND) == "no":  # "Choose another voice"
+            return _choose(request, record, picked, {})
+        return _send_text(request, record, picked, clouds, config)
     try:
         _library(request).choose(record.id, chosen)
     except DogearError:
@@ -172,6 +181,7 @@ def _choose(
     summary = record.summary
     assert summary is not None
     config: Config = request.app.state.config
+    voices = choices.voice_options(config, summary)
     return render(
         request,
         "choose.html",
@@ -182,13 +192,45 @@ def _choose(
         summary=summary,
         about=f"{count(len(summary.sections), 'section')} and {count(summary.words, 'word')}",
         formats=choices.format_options(),
-        voices=choices.voice_options(),
+        voices=voices,
+        cloud_voices=choices.offers_cloud_voices(voices),
         speeds=choices.speed_options(config),
         sections=[
             {"number": s.number, "description": describe_section(s)} for s in summary.sections
         ],
         picked=picked,
-        ask_language=choices.asks_about_language(summary),
+        ask_language=choices.asks_about_language(summary, config),
+        language_voices=any(group.for_book_language for group in voices),
+    )
+
+
+def _send_text(
+    request: Request,
+    record: BookRecord,
+    picked: choices.Picked,
+    clouds: list[CloudVoice],
+    config: Config,
+) -> Response:
+    """Before a book that may send its text off this computer starts: which voices send
+    it where (every voice the run may use, not only the one chosen), in the words
+    `dogear make` uses, and a button to send it, which sends the same choices again with
+    send=yes."""
+    summary = record.summary
+    assert summary is not None
+    hosts = hosts_in_words(clouds)
+    main = find_voice(picked.voice, config)
+    return render(
+        request,
+        "send_text.html",
+        f"Send the text of {summary.title} to {hosts}?",
+        book_id=record.id,
+        summary=summary,
+        hosts=hosts,
+        warning=run_warning(clouds, main),
+        # Listen says words with the chosen voice alone (`dogear say`).
+        listen_sends=any(cloud.chosen.spec == main.spec for cloud in clouds),
+        fields=choices.form_fields(picked),
+        send=SEND,
     )
 
 
@@ -201,9 +243,9 @@ async def stop(request: Request) -> Response:
 async def read_again(request: Request) -> Response:
     record = requested_book(request)
     try:
-        _library(request).read_again(record.id)
+        await run_in_threadpool(_library(request).read_again, record.id)
     except DogearError:
-        pass  # being read again already; the book's page says how it's going
+        pass  # being read again already, or still stopping; the book's page says which
     return RedirectResponse(f"/books/{record.id}", status_code=303)
 
 

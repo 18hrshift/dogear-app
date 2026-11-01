@@ -8,12 +8,11 @@ package (see `epub_cover`).
 
 from __future__ import annotations
 
-import logging
 from dataclasses import replace
 from pathlib import Path
 
 from dogear.config import Config
-from dogear.document import Book, Footnote, Paragraph, Section
+from dogear.document import Book
 from dogear.errors import ConfigError, ExtractionError
 from dogear.extract.epub_cover import read_cover
 from dogear.extract.epub_nav import read_navigation
@@ -25,8 +24,7 @@ from dogear.extract.epub_package import (
     read_package,
 )
 from dogear.extract.epub_sections import read_sections
-
-log = logging.getLogger(__name__)
+from dogear.extract.note_links import link_notes
 
 DRM_HINT = (
     "Dogear needs a DRM-free copy. Many stores and public-domain libraries sell or give "
@@ -56,7 +54,7 @@ def extract(path: Path, config: Config) -> Book:
             f"{path.name} has no readable text: every document in its reading order is empty.",
             hint="If it's a picture book or a scan, it has no text for Dogear to read aloud.",
         )
-    _link_notes(sections, note_markers)
+    link_notes(sections, note_markers)
     return Book(
         metadata=replace(package.metadata, cover=cover),
         sections=sections,
@@ -84,35 +82,3 @@ def _drm_error(name: str) -> ExtractionError:
         f"{name} is protected by DRM (copy protection), so Dogear can't read its text.",
         hint=DRM_HINT,
     )
-
-
-def _link_notes(sections: list[Section], note_markers: dict[str, str]) -> None:
-    """Label notes with the marker printed where they're referenced, and report problems."""
-    found: set[str] = set()
-    for section in sections:
-        for i, block in enumerate(section.blocks):
-            if not isinstance(block, Footnote):
-                continue
-            if block.note_id in found:
-                log.warning(
-                    "Two notes share the id %r, so references to it are ambiguous.", block.note_id
-                )
-            found.add(block.note_id)
-            marker = note_markers.get(block.note_id)
-            if marker:
-                section.blocks[i] = replace(block, label=marker)
-    missing = {
-        ref
-        for section in sections
-        for block in section.blocks
-        if isinstance(block, Paragraph)
-        for ref in block.note_refs
-        if ref not in found
-    }
-    if missing:
-        log.warning(
-            "%d note references point to notes Dogear didn't find (for example %r), so those "
-            "notes won't be read.",
-            len(missing),
-            sorted(missing)[0],
-        )

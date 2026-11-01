@@ -1,0 +1,112 @@
+# Piper voices this plugin offers, each file pinned by SHA-256. A download that doesn't
+# match is rejected. This is a record of upstream files, not a settings file: choose a
+# voice with `--voice piper:NAME` or in [voice] in a settings file.
+#
+# Chosen on 2026-10-30 from rhasspy/piper-voices, for training data anyone may use:
+# public domain, CC0, or CC BY, and trained from scratch (or from another voice here).
+# Left out: voices from data licensed for research or non-commercial use only (en_US-ryan,
+# en_US-hfc_*, en_GB-semaine, and others), voices whose card says only "See URL", and
+# the voices fine-tuned from en_US-lessac, whose Blizzard 2013 recordings are licensed
+# only for research into speech technology (among them en_GB-alba, fr_FR-siwis,
+# de_DE-thorsten, and es_ES-davefx). See docs/voice-engines.md in Dogear.
+#
+# Voices are listed best first: Piper's own quality levels, high before medium before
+# x_low, then English first. Piper has no ratings of its own.
+
+# About how many words a minute Piper's voices say at speed 1.0, with Dogear's pauses:
+# what Dogear estimates a book's length and disk space from before speaking it. Sections 2
+# to 6 of Jekyll and Hyde (8,038 words) with en_US-ljspeech-high came to 44.8 minutes, 179
+# words a minute.
+words_per_minute = 180
+
+# One revision of the repository, so a file can't change under its pin.
+base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/b4e358ffcb232591bf73a540e70f7de528e4174a"
+
+[voices.en_US-ljspeech-high]
+path = "en/en_US/ljspeech/high"
+sample_rate = 22050
+language = "en-US"
+description = "American English"
+gender = "female"
+quality = "high"
+data = "LJ Speech, public domain. Trained from scratch."
+model = { sha256 = "5d4f08ba6a2a48c44592eed3ce56bf85e9de3dd4e20df90541ae68a8310c029a", size = 114199011 }
+config = { sha256 = "7e1f4634af596d83cca997fb7a931ba80b70f8a316a2655ee69c55365e0ace14", size = 4970 }
+
+[voices.en_GB-cori-high]
+path = "en/en_GB/cori/high"
+sample_rate = 22050
+language = "en-GB"
+description = "British English"
+gender = "female"
+quality = "high"
+data = "LibriVox recordings, public domain. Trained from scratch."
+model = { sha256 = "470b4dd634c98f8a4850d7626ffc3dfc90774628eeef6605a6dd8f88f30a5903", size = 114219352 }
+config = { sha256 = "9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec", size = 4963 }
+
+[voices.en_US-kristin-medium]
+path = "en/en_US/kristin/medium"
+sample_rate = 22050
+language = "en-US"
+description = "American English"
+gender = "female"
+quality = "medium"
+data = "LibriVox recordings, public domain. Trained from scratch."
+model = { sha256 = "5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4", size = 63531379 }
+config = { sha256 = "5681426d4aead22195de70531eeeeddb46493cfaffc5764b2ea3db73428b651c", size = 4968 }
+
+[voices.en_US-norman-medium]
+path = "en/en_US/norman/medium"
+sample_rate = 22050
+language = "en-US"
+description = "American English"
+gender = "male"
+quality = "medium"
+data = "LibriVox recordings, public domain. Trained from scratch."
+model = { sha256 = "b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71", size = 63531379 }
+config = { sha256 = "6c2db7f558a4a8deb9fe822583c1c5105f6c4e834dd0f9de8ad17a888ee9fe1d", size = 4968 }
+
+[voices.en_US-john-medium]
+path = "en/en_US/john/medium"
+sample_rate = 22050
+language = "en-US"
+description = "American English"
+gender = "male"
+quality = "medium"
+data = "LibriVox recordings, public domain. Fine-tuned from en_US-kristin-medium."
+model = { sha256 = "789c6c875726e627ddee93d51d8727859abe9c091c3d141591f4b83c2072e988", size = 63531379 }
+config = { sha256 = "af60f177b6b550f3d7a302720c0fb89e7f94a82b5dca464775ef63b1c69ba09a", size = 4965 }
+
+# The voices below read books and passages in their languages ([voice.languages] in
+# Dogear's settings). The French and German voices were trained on many speakers; Piper
+# speaks with the first of them.
+
+[voices.fr_FR-mls-medium]
+path = "fr/fr_FR/mls/medium"
+sample_rate = 22050
+language = "fr-FR"
+description = "French"
+quality = "medium"
+data = "Multilingual LibriSpeech (French), CC BY 4.0. Trained from scratch."
+model = { sha256 = "0ed223f78466917f2bae05ee90096ce69ab1fdeb251f55590d0e7422d234e162", size = 76733750 }
+config = { sha256 = "252b0b0a6e4cc4949e23eccb956f9c779986c32f934f2f7e2191e5fdc2edca61", size = 7036 }
+
+[voices.de_DE-mls-medium]
+path = "de/de_DE/mls/medium"
+sample_rate = 22050
+language = "de-DE"
+description = "German"
+quality = "medium"
+data = "Multilingual LibriSpeech (German), CC BY 4.0. Trained from scratch."
+model = { sha256 = "69cd1d2aa5a35839a518966fcc4924b5f93e5f8c948ed0752b1a616ad53f65bf", size = 76961079 }
+config = { sha256 = "b0af1c89ddfdc72d32e015729b0e89b99eec13c2c8caa1db7488d98e9e570b40", size = 8948 }
+
+[voices.es_ES-carlfm-x_low]
+path = "es/es_ES/carlfm/x_low"
+sample_rate = 16000
+language = "es-ES"
+description = "Spanish (Spain)"
+quality = "x_low"
+data = "carlfm01's speech data, public domain. Trained from scratch."
+model = { sha256 = "d69677323a907cd4963f42b29c20a98b5d6bfa7f3e64df339915e4650c00d125", size = 28130791 }
+config = { sha256 = "d9bdfa9ff01eb2bc9e62e7d2593939d1e4c4d8eb7cf75f972731539d12399966", size = 4159 }

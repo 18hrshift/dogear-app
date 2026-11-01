@@ -11,7 +11,7 @@ from pathlib import Path
 from dogear.web.books import MADE, ZIPS, BookRecord, BookStore, Output
 from dogear.web.child import Stopper, child_command, interrupted, read_lines, start_lines
 from dogear.web.page_words import words_option
-from dogear.web.reading import problem_from_output
+from dogear.web.reading import PROBLEM_PREFIXES, problem_from_output
 from dogear.web.settings import WebSettings
 
 
@@ -57,7 +57,7 @@ def make_book(store: BookStore, settings: WebSettings, book_id: str, stopper: St
                 continue
             if line.startswith("Saved: "):
                 saved.append(line.removeprefix("Saved: "))
-            elif line.startswith(("Error: ", "What to do: ")):
+            elif line.startswith(PROBLEM_PREFIXES):
                 problem.append(line)
             elif line.strip():
                 store.add_line(book_id, line)  # a full disk is logged, and the book goes on

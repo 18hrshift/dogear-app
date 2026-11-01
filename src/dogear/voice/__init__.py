@@ -1,142 +1,99 @@
 """Voices: turning sentences into audio.
 
-`engine.py` defines what every engine provides. Kokoro is the built-in engine; its model
-files are downloaded on first use and checked against `catalog.toml`. A standalone build
-carries the default voice's files (see `dogear.bundle`), so it downloads only other voices.
-One Dogear at a time downloads into a models folder (`downloads.download_lock`).
+`engine.py` defines what a voice gives the renderer, and `engines.py` what a voice
+engine plugin gives Dogear, and finds the installed ones. Kokoro (`kokoro_plugin.py`)
+comes with Dogear and registers the way any plugin does. This module makes the voice
+the settings choose, whatever its engine.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-
-from dogear import bundle
 from dogear.config import Config
 from dogear.errors import VoiceError
-from dogear.paths import models_dir
-from dogear.pronunciations import dictionary_from_config
-from dogear.tools import find_tool
-from dogear.voice.catalog import (
-    VoiceInfo,
-    catalog,
-    kokoro_file,
-    kokoro_voices,
-    spacy_model_dir,
-    spacy_wheel,
-)
-from dogear.voice.downloads import RemoteFile, Report, download_lock, ensure_files
+from dogear.language_match import is_english
+from dogear.pronunciations import PronunciationDictionary, dictionary_from_config
+from dogear.voice.cloud import refuse_unless_allowed, warning
+from dogear.voice.downloads import Report
 from dogear.voice.engine import VoiceEngine
-from dogear.voice.spacy_model import unpack_spacy_model
+from dogear.voice.engines import (
+    ChosenVoice,
+    EngineVoice,
+    VoicePace,
+    configured_voice,
+    run_plugin,
+)
 
-ENGINES = ("kokoro",)
-
-
-@dataclass(frozen=True)
-class KokoroSetup:
-    voice: VoiceInfo
-    model: RemoteFile
-    tokenizer: RemoteFile
-    voice_file: RemoteFile
+__all__ = ["VoicePace", "make_engine", "make_voice", "prepare_voice", "voice_pace"]
 
 
 def make_engine(config: Config, report: Report) -> VoiceEngine:
     """The configured voice, downloading its files first if needed."""
-    # Checked first, so a missing program or a mistake in a pronunciation file is
-    # reported before a long download.
-    espeak = find_tool("espeak_ng", config)
-    dictionary = dictionary_from_config(config)
-    setup = prepare_kokoro(config, report)
+    return make_voice(config, configured_voice(config), report)
 
-    from dogear.voice.g2p import EnglishG2P
-    from dogear.voice.kokoro import KokoroEngine, check_phonemes, load_vocab
 
-    check_phonemes(dictionary, load_vocab(setup.tokenizer.path))
-    models = models_dir(config)
-    kokoro = catalog()["kokoro"]
-    return KokoroEngine(
-        model=setup.model.path,
-        tokenizer=setup.tokenizer.path,
-        voice=setup.voice_file.path,
-        g2p=EnglishG2P(
-            spacy_model_dir(models),
-            setup.voice.british,
-            espeak,
-            dictionary,
-            espeak_data=bundle.espeak_data(espeak),
-        ),
-        speed=config["voice"]["speed"],
-        threads=config["kokoro"]["threads"],
-        sample_rate=kokoro["sample_rate"],
-        max_phonemes=kokoro["max_phonemes"],
-        identity=f"kokoro|{setup.model.sha256}|{setup.voice_file.sha256}",
+def make_voice(config: Config, chosen: ChosenVoice, report: Report) -> VoiceEngine:
+    """The voice `chosen`, downloading its files first if needed. Every voice a run uses
+    is made here, so every one is checked the same way: a voice that sends text off this
+    computer is refused unless the settings allow it, and is said to before it is made
+    (cloud.py)."""
+    for cloud in refuse_unless_allowed([chosen], config):
+        report(" ".join(warning(cloud)))
+    # Read first, so a mistake in a pronunciation file is reported before a long download.
+    pronunciations = dictionary_from_config(config)
+    _say_if_phoneme_entries_are_skipped(chosen, pronunciations, report)
+    inner = run_plugin(
+        chosen.engine,
+        "loading its voice",
+        lambda: chosen.engine.plugin.engine(config, chosen.voice, pronunciations, report),
     )
+    return EngineVoice(chosen, inner)
 
 
-def prepare_kokoro(config: Config, report: Report) -> KokoroSetup:
-    """Check the voice settings and make sure every file the voice needs is on disk."""
-    _check_engine(config)
-    voice = find_voice(config["voice"]["voice"])
-    build = config["kokoro"]["model"]
-    builds = catalog()["kokoro"]["models"]
-    if build not in builds:
+def prepare_voice(config: Config, report: Report) -> ChosenVoice:
+    """Make sure every file the configured voice needs is on disk, without loading it."""
+    chosen = configured_voice(config)
+    run_plugin(
+        chosen.engine,
+        "getting its voice files ready",
+        lambda: chosen.engine.plugin.prepare(config, chosen.voice, report),
+    )
+    return chosen
+
+
+def voice_pace(config: Config, chosen: ChosenVoice | None = None) -> VoicePace:
+    """A voice's sample rate and about how many words a minute it says, known without
+    loading or downloading anything. The voice is `chosen`, or the configured one."""
+    speed = config["voice"]["speed"]
+    if speed <= 0:
         raise VoiceError(
-            f"kokoro.model is '{build}', which isn't a Kokoro model build.",
-            hint=f"Use one of: {', '.join(builds)}.",
+            f"voice.speed is {speed}, but it must be more than 0.",
+            hint="Use a value from 0.5 to 2.0, such as 0.9 or 1.1.",
         )
-    models = models_dir(config)
-    setup = KokoroSetup(
-        voice=voice,
-        model=kokoro_file("model", build, models),
-        tokenizer=kokoro_file("tokenizer", "", models),
-        voice_file=kokoro_file("voice", voice.name, models),
-    )
-    _ensure_downloaded([setup.model, setup.tokenizer, setup.voice_file], models, config, report)
-    return setup
-
-
-def prepare_spacy(config: Config, report: Report) -> Path:
-    """spaCy's English model folder, downloading it (about 13 MB) first if needed.
-
-    Enough for misaki to tag and look up words without the Kokoro model, as
-    `dogear words` does.
-    """
-    return _ensure_downloaded([], models_dir(config), config, report)
-
-
-def _ensure_downloaded(
-    files: list[RemoteFile], models: Path, config: Config, report: Report
-) -> Path:
-    """Make sure `files` and spaCy's unpacked model are on disk, downloading whatever
-    isn't, under the models folder's lock. Returns spaCy's model folder."""
-    spacy = spacy_model_dir(models)
-    if spacy.is_dir() and all(f.path.is_file() for f in files):
-        return spacy  # nothing to download, so no lock, and nothing written
-    with download_lock(models, report):
-        # Asked again: another Dogear may have downloaded them while this one waited.
-        ensure_files([*files, *_spacy_download(models)], config, report)
-        return unpack_spacy_model(models)
-
-
-def _spacy_download(models: Path) -> list[RemoteFile]:
-    """The spaCy wheel, unless its model folder is already unpacked."""
-    return [] if spacy_model_dir(models).is_dir() else [spacy_wheel(models)]
-
-
-def find_voice(name: str) -> VoiceInfo:
-    for voice in kokoro_voices():
-        if voice.name == name:
-            return voice
-    raise VoiceError(
-        f"There's no voice called '{name}'.",
-        hint="Run `dogear voices` to list them.",
+    chosen = chosen or configured_voice(config)
+    return run_plugin(
+        chosen.engine,
+        "estimating how long its audio will be",
+        lambda: chosen.engine.plugin.pace(config, chosen.voice),
     )
 
 
-def _check_engine(config: Config) -> None:
-    engine = config["voice"]["engine"]
-    if engine not in ENGINES:
-        raise VoiceError(
-            f"voice.engine is '{engine}', which Dogear doesn't have.",
-            hint=f"Use one of: {', '.join(ENGINES)}.",
-        )
+def _say_if_phoneme_entries_are_skipped(
+    chosen: ChosenVoice, pronunciations: PronunciationDictionary, report: Report
+) -> None:
+    """Phoneme entries are written in misaki's symbols, which only some engines read.
+    Sounds-like entries are applied before any engine sees the text, so they always work.
+    Phoneme entries are English, so a voice of another language never needed them."""
+    entries = pronunciations.with_phonemes().entries
+    if (
+        not entries
+        or chosen.engine.plugin.reads_misaki_phonemes
+        or not is_english(chosen.voice.language)
+    ):
+        return
+    count = "1 phoneme entry" if len(entries) == 1 else f"{len(entries)} phoneme entries"
+    report(
+        f"Your pronunciation files have {count}, such as {entries[0].where()}. They are "
+        f"skipped: phoneme entries are written in the Kokoro voice's symbols, and "
+        f"{chosen.voice.name} is a {chosen.engine.title} voice. Entries that give a "
+        "spelling still apply."
+    )

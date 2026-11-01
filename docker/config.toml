@@ -15,3 +15,6 @@ cache_dir = "/data/cache"
 # Uploaded books, what's made from them, and the access key, on the /data volume so they
 # (and the key, so the same link keeps working) outlast the container.
 dir = "/data/web"
+# The address Dogear finds for itself is the container's own, which other devices can't
+# reach, so the log says to use this computer's address in place of 127.0.0.1 instead.
+show_network_address = false

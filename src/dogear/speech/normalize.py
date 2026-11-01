@@ -1,10 +1,14 @@
 """Rewrite one sentence of display text into what a voice engine should say.
 
 Engines differ in how they read "Dr.", "3.14", or "1984", so Dogear spells these out
-itself and every engine gets the same words. Abbreviation tables come from config and
-are English for now; numbers use num2words in the book's language when it supports it.
-Currency, clock times, units, and roman numerals are English only: other languages say
-them differently, so their text keeps the digits and symbols for now.
+itself and every engine gets the same words. All of these rewrites are English: the
+abbreviation tables in config, numbers (with num2words), currency, clock times, units,
+and roman numerals. Text in another language is only tidied (plain quotes, dashes as
+pauses, invisible characters taken out) and given that language's pronunciation
+entries, then goes to its voice as written: other languages write numbers differently
+("1,5" is one and a half in French), and their voices' engines read numbers, symbols,
+and abbreviations by their own rules, as Piper's eSpeak NG does. Text with no language
+is read as English, as Dogear reads a book that doesn't say.
 
 The user's pronunciation files come first, before any of Dogear's own rewrites, so an
 entry matches the book's spelling ("St. John", not "Saint John").
@@ -12,7 +16,6 @@ entry matches the book's spelling ("St. John", not "Saint John").
 
 from __future__ import annotations
 
-import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -20,14 +23,13 @@ from dataclasses import dataclass, field
 from num2words import num2words
 
 from dogear.config import Config
+from dogear.language_match import is_english
 from dogear.pronunciations import PronunciationDictionary, dictionary_from_config
 from dogear.speech.money import say_money
 from dogear.speech.roman import heading_numerals, keyword_numerals
 from dogear.speech.spoken import ENGLISH, Pair, keep_final_period, say_amount
 from dogear.speech.times import say_times
 from dogear.speech.units import say_units
-
-log = logging.getLogger(__name__)
 
 _PUNCTUATION = {
     "‘": "'",
@@ -58,8 +60,6 @@ _NUMBER = re.compile(
 )
 _YEAR_RANGE = range(1100, 2100)  # four-digit numbers read the way people say years
 _LONGEST_CARDINAL = 999_999  # longer ungrouped numbers are usually codes: read digit by digit
-
-_warned_languages: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -108,7 +108,7 @@ class SpeechRules:
 
 def normalize_for_speech(text: str, rules: SpeechRules, lang: str | None) -> str:
     """One sentence of body text, rewritten as the words a voice should say."""
-    return _speak(_prepare(text, rules), rules, lang)
+    return _speak(_prepare(text, rules, lang), rules, lang)
 
 
 def normalize_heading(text: str, rules: SpeechRules, lang: str | None) -> str:
@@ -117,23 +117,24 @@ def normalize_heading(text: str, rules: SpeechRules, lang: str | None) -> str:
     BEGINNING" is "CHAPTER one THE BEGINNING". Body text leaves both alone, since there
     a bare numeral may be a letter and a lone "I" before a word may be the pronoun.
     """
-    text = _prepare(text, rules)
-    if _is_english(lang):
+    text = _prepare(text, rules, lang)
+    if is_english(lang):
         text = heading_numerals(text, rules.roman_keywords)
     return _speak(text, rules, lang)
 
 
-def _prepare(text: str, rules: SpeechRules) -> str:
-    """Punctuation made plain, then the user's sounds-like entries."""
-    return rules.dictionary.say_sounds_like(_normalize_punctuation(text))
+def _prepare(text: str, rules: SpeechRules, lang: str | None) -> str:
+    """Punctuation made plain, then the user's sounds-like entries for the language."""
+    tidied = _normalize_punctuation(text, is_english(lang))
+    return rules.dictionary.for_language(lang).say_sounds_like(tidied)
 
 
 def _speak(text: str, rules: SpeechRules, lang: str | None) -> str:
-    if _is_english(lang):
+    if is_english(lang):
         text = _english_passes(text, rules)
-    for pattern, expansion in rules.patterns():
-        text = pattern.sub(lambda m, e=expansion: keep_final_period(m, e), text)
-    text = _NUMBER.sub(lambda m: _speak_number(m, _num2words_lang(lang)), text)
+        for pattern, expansion in rules.patterns():
+            text = pattern.sub(lambda m, e=expansion: keep_final_period(m, e), text)
+        text = _NUMBER.sub(_speak_number, text)
     text = _MARKUP.sub("", text)
     return _SPACES.sub(" ", text).strip()
 
@@ -151,47 +152,31 @@ def _pairs(table: dict[str, list[str]]) -> dict[str, Pair]:
     return {key: (singular, plural) for key, (singular, plural) in table.items()}
 
 
-def _normalize_punctuation(text: str) -> str:
+def _normalize_punctuation(text: str, english: bool) -> str:
     # Invisible formatting characters (word joiners, zero-width spaces, soft hyphens) help
     # page layout but can trip a voice engine.
     text = "".join(c for c in text if unicodedata.category(c) != "Cf")
     for char, replacement in _PUNCTUATION.items():
         text = text.replace(char, replacement)
-    text = _EN_DASH_RANGE.sub(" to ", text)
+    if english:
+        text = _EN_DASH_RANGE.sub(" to ", text)
+    else:
+        text = _EN_DASH_RANGE.sub("-", text)  # a range, as the language's voice reads one
     return _DASHES.sub(", ", text)  # a dash is a pause; a comma is the safest pause cue
 
 
-def _num2words_lang(lang: str | None) -> str:
-    return (lang or ENGLISH).split("-")[0].lower()
+def _speak_number(match: re.Match[str]) -> str:
+    if amount := match.group("grouped") or match.group("decimal"):
+        return say_amount(amount, ENGLISH)
+    if ordinal := match.group("ordinal"):
+        return num2words(int(ordinal), lang=ENGLISH, to="ordinal")
+    return _speak_integer(match.group("int"))
 
 
-def _is_english(lang: str | None) -> bool:
-    """English, or a book that doesn't say (read as English, like its numbers)."""
-    return _num2words_lang(lang) == ENGLISH
-
-
-def _speak_number(match: re.Match[str], lang: str) -> str:
-    original = match.group(0)
-    try:
-        if amount := match.group("grouped") or match.group("decimal"):
-            return say_amount(amount, lang)
-        if ordinal := match.group("ordinal"):
-            return num2words(int(ordinal), lang=lang, to="ordinal")
-        return _speak_integer(match.group("int"), lang)
-    except NotImplementedError:
-        if lang not in _warned_languages:
-            _warned_languages.add(lang)
-            log.warning("Numbers can't be spelled out in language '%s'; leaving digits.", lang)
-        return original
-
-
-def _speak_integer(digits: str, lang: str) -> str:
+def _speak_integer(digits: str) -> str:
     value = int(digits)
     if (digits.startswith("0") and len(digits) > 1) or value > _LONGEST_CARDINAL:
-        return " ".join(num2words(int(d), lang=lang) for d in digits)
+        return " ".join(num2words(int(d), lang=ENGLISH) for d in digits)
     if len(digits) == 4 and value in _YEAR_RANGE:
-        try:
-            return num2words(value, lang=lang, to="year")
-        except NotImplementedError:
-            pass
-    return num2words(value, lang=lang)
+        return num2words(value, lang=ENGLISH, to="year")
+    return num2words(value, lang=ENGLISH)

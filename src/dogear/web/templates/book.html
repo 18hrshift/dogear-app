@@ -17,7 +17,7 @@
 <p>{{ book.error }}</p>
 {% endif %}
 
-{% if book.state == "unreadable" %}
+{% if book.state in ("unreadable", "read_stopped") %}
 <form method="post" action="/books/{{ book.id }}/read">
   <button type="submit">Read again</button>
 </form>
@@ -25,6 +25,12 @@
 
 {% if watching %}
 <p><a id="check-progress" href="/books/{{ book.id }}">Check progress</a></p>
+{% endif %}
+
+{% if book.state == "reading" %}
+<form method="post" action="/books/{{ book.id }}/stop">
+  <button type="submit" class="secondary">Stop reading this book</button>
+</form>
 {% endif %}
 
 {% if book.state in ("waiting", "making") %}
@@ -59,7 +65,7 @@
 <p>If the voice says a name wrong, <a href="/books/{{ book.id }}/words">check how words are said</a>, fix it, then make the book again. Only the sentences with the words you fixed are spoken again.</p>
 {% endif %}
 
-{% if book.state in ("waiting", "making") or (book.state in ("failed", "stopped") and progress.lines) %}
+{% if book.state in ("reading", "waiting", "making") or (book.state in ("unreadable", "read_stopped", "failed", "stopped") and progress.lines) %}
 <h2>Progress so far</h2>
 <p id="lines-left-out"{% if not progress.left_out %} hidden{% endif %}>{% if progress.left_out %}{{ left_out }}{% endif %}</p>
 <ol id="progress-lines" class="progress-lines" start="{{ progress.left_out + 1 }}" data-max-lines="{{ max_lines }}" data-left-out-one="{{ left_out_one }}" data-left-out-many="{{ left_out_many }}">

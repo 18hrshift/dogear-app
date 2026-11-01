@@ -15,6 +15,7 @@ import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from dogear.output.daisy202_smil import smil_document, write_smil
 from dogear.output.daisy202_text import text_document
 from dogear.output.folder_record import claim_folder, finish_folder
 from dogear.readalong.model import SectionText
+from dogear.voice.engines import ChosenVoice
 
 log = logging.getLogger(__name__)
 
@@ -39,8 +41,10 @@ def build_daisy202(
     config: Config,
     *,
     today: date | None = None,
+    voices: Sequence[ChosenVoice] = (),
 ) -> None:
-    """Write the talking book into `folder`, creating it if needed.
+    """Write the talking book into `folder`, creating it if needed. `voices` read it,
+    the main voice first (none: the configured voice alone), and are named as its narrator.
 
     `sections` come from `readalong.build_readalong`, in reading order, with their audio
     already encoded by `talking_audio` (each `section.audio.path` is the MP3 to put in
@@ -48,7 +52,7 @@ def build_daisy202(
     didn't make in `folder` are left alone (see `folder_record`). `today` is the
     book's dc:date; it defaults to today.
     """
-    book = plan_book(sections, metadata, config)
+    book = plan_book(sections, metadata, config, voices)
     names = book.files()
     _make_folder(folder)
     stale = claim_folder(folder, metadata, names)

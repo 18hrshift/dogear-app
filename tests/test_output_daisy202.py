@@ -22,6 +22,7 @@ from lxml import etree
 from dogear import __version__
 from dogear.document import Book, Heading, Metadata, PageMarker, Paragraph, Section, Table
 from dogear.errors import OutputFolderError
+from dogear.language_detection import DetectionSettings, LanguageGuesser
 from dogear.narration import narrate_book, narrate_title
 from dogear.output import daisy202
 from dogear.output.book_identity import book_uid
@@ -46,9 +47,9 @@ PARSER = etree.XMLParser(no_network=True, resolve_entities=False, load_dtd=False
 # --- Building a book without a voice -------------------------------------------------
 
 
-def sections_for(book: Book, config, audio_dir: Path) -> list[SectionText]:
+def sections_for(book: Book, config, audio_dir: Path, guesser=None) -> list[SectionText]:
     """The read-along sections, with uneven made-up timings and a stand-in MP3 each."""
-    narrations = narrate_book(book, config)
+    narrations = narrate_book(book, config, guesser)
     if config["narration"]["announce_title"]:
         narrations.insert(0, narrate_title(book, config))
     chapters = []
@@ -70,11 +71,12 @@ def write_book(config, tmp_path):
     audio = tmp_path / "audio"
     audio.mkdir()
 
-    def write(book: Book | None = None, folder: Path | None = None, cfg=None) -> Path:
+    def write(book: Book | None = None, folder: Path | None = None, cfg=None, guesser=None) -> Path:
         cfg = cfg or config
         book = book or everything_book()
         folder = folder or tmp_path / "book"
-        build_daisy202(sections_for(book, cfg, audio), book.metadata, folder, cfg, today=TODAY)
+        sections = sections_for(book, cfg, audio, guesser)
+        build_daisy202(sections, book.metadata, folder, cfg, today=TODAY)
         return folder
 
     return write
@@ -319,6 +321,23 @@ def test_language_tags_are_made_valid_or_left_out(write_book, caplog):
     paragraphs = parse(folder / "s002.html").findall(f".//{X}p")
     assert [p.get("lang") for p in paragraphs] == [None, None]
     assert "Ignoring the language 'français'" in caplog.text
+    check_book(folder)
+
+
+def test_languages_found_by_detection_are_marked_in_the_text(write_book, config):
+    settings = DetectionSettings.from_config(config)
+    guesser = LanguageGuesser(replace(settings, sentence_check_min_letters=100), {"en", "fr"})
+    mixed = (
+        "The old lady put her cup down on the table and looked out of the window. Then she "
+        "said: La vieille dame posa sa tasse sur la table et regarda par la fenêtre. And she "
+        "smiled at the rain falling on the garden for a long while."
+    )
+    french = "Le lendemain matin, nous partîmes de bonne heure pour la gare."
+    book = small_book(chapter("One", Paragraph(mixed), Paragraph(french)))
+    folder = write_book(book, guesser=guesser)
+    first, second = parse(folder / "s002.html").findall(f".//{X}p")
+    assert [s.get("lang") for s in first.findall(f"{X}span")] == [None, "fr", None]
+    assert second.get("lang") == "fr"
     check_book(folder)
 
 

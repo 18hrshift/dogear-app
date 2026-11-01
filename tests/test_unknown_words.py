@@ -103,7 +103,7 @@ def fakes(monkeypatch, config, tmp_path):
     import spacy
 
     config["models"]["dir"] = str(tmp_path / "models")
-    monkeypatch.setattr(unknown_words, "extract_book", lambda path, cfg: small_book())
+    monkeypatch.setattr(unknown_words, "extract_book", lambda path, cfg, report: small_book())
     monkeypatch.setattr(spacy, "load", lambda path, enable: spacy.blank("en"))
     requested = []
 
@@ -117,7 +117,7 @@ def fakes(monkeypatch, config, tmp_path):
     def no_network(*args, **kwargs):
         raise AssertionError("tests must not download anything")
 
-    monkeypatch.setattr("dogear.voice.ensure_files", fake_ensure_files)
+    monkeypatch.setattr("dogear.voice.kokoro_plugin.ensure_files", fake_ensure_files)
     monkeypatch.setattr(downloads.urllib.request, "urlopen", no_network)
     return requested
 
@@ -162,7 +162,7 @@ def test_the_voices_accent_is_used(fakes, config, tmp_path, monkeypatch):
 
 
 def test_a_book_in_another_language_needs_the_override(fakes, config, tmp_path, monkeypatch):
-    monkeypatch.setattr(unknown_words, "extract_book", lambda path, cfg: small_book("fr"))
+    monkeypatch.setattr(unknown_words, "extract_book", lambda path, cfg, report: small_book("fr"))
     with pytest.raises(VoiceError, match="'fr'"):
         find_unknown_words(WordsRequest(tmp_path / "notes.epub"), config, print)
     found = find_unknown_words(WordsRequest(tmp_path / "notes.epub", language="en"), config, print)

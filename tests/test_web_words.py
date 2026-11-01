@@ -2,7 +2,9 @@
 tests/fake_dogear.py), listing them, saving spellings, and the errors and limits."""
 
 import json
+import os
 import re
+import stat
 import sys
 import time
 from dataclasses import replace
@@ -21,10 +23,18 @@ from web_samples import (
     visitor,
 )
 
+from dogear.unknown_words import UnknownWord
 from dogear.web import child
 from dogear.web.books import BookRecord
-from dogear.web.word_check import WORDS_SHOWN, WordCheck, check_for, parse_words
-from dogear.web.word_pages import sections_in_words
+from dogear.web.word_check import (
+    CHECK_AGAIN,
+    CHECK_FILE,
+    CLOSED_ERROR,
+    WordCheck,
+    check_for,
+    parse_words,
+)
+from dogear.web.word_pages import WORDS_SHOWN, sections_in_words
 
 FAKE = Path(__file__).parent / "fake_dogear.py"
 
@@ -277,14 +287,15 @@ def test_a_word_with_exact_phonemes_is_not_changed_by_the_page(running):
     ]
 
 
-def test_the_list_is_capped_and_says_how_many_more(running):
+def test_the_list_shows_the_most_frequent_and_says_how_many_more(running):
     app, client = running
     book_id = ready_book(app, "manywords")
     found = check(client, app, book_id)
-    assert (len(found.words), found.total) == (WORDS_SHOWN, 60)
+    assert (len(found.words), found.total) == (60, 60)
     html, tree = page(client, book_id)
     assert len(tree.xpath("//fieldset[@class='word']")) == WORDS_SHOWN
     assert "10 more words aren&#39;t listed. Each comes up 51 times or fewer." in html
+    assert tree.xpath("//a[text()='Show all 60 words']/@href") == [f"/books/{book_id}/words/all"]
 
 
 def test_a_book_whose_words_the_voice_knows(running):
@@ -387,8 +398,8 @@ def test_only_numbered_word_fields_count(running):
         "say-x": "pool",
         "word-99999999": "Lanyon",
         "say-99999999": "lan yon",
-        f"word-{WORDS_SHOWN + 1}": "Carew",
-        f"say-{WORDS_SHOWN + 1}": "ca roo",
+        f"word-{app.state.settings.words_listed + 1}": "Carew",
+        f"say-{app.state.settings.words_listed + 1}": "ca roo",
         "word-²": "Enfield",
         "say-²": "en field",
     }
@@ -409,9 +420,9 @@ def test_check_for_and_the_words_child_json():
     assert check_for(record) == WordCheck("waiting", (), False, "af_heart")
     english = replace(record, choices=replace(CHOSEN, sections=(1,), as_english=True))
     assert check_for(english) == WordCheck("waiting", (1,), True, "af_heart")
-    done = parse_words(b'{"words": [{"word": "Hyde", "count": 2}]}', WordCheck("checking"))
+    done = parse_words(b'{"words": [{"word": "Hyde", "count": 2}]}', WordCheck("checking"), 9)
     assert (done.state, done.total, [w.word for w in done.words]) == ("done", 1, ["Hyde"])
-    bad = parse_words(b'{"words": [{"word": "Hyde"}]}', WordCheck("checking"))
+    bad = parse_words(b'{"words": [{"word": "Hyde"}]}', WordCheck("checking"), 9)
     assert bad.state == "failed" and "word 1 has no count" in bad.error
 
 
@@ -431,3 +442,163 @@ def test_no_page_holds_inline_script_or_style(running):
     html, _ = page(client, book_id)
     assert not re.search(r"<script(?![^>]*\bsrc=)", html)
     assert "style=" not in html
+
+
+# Saved checks, and every word the check kept
+
+
+def restarted(app):
+    """The app again, as after a restart: a new library on the same folder."""
+    return sample_app(app.state.settings.dir, config=app.state.config)
+
+
+def test_a_check_is_saved_with_the_book_and_still_there_after_a_restart(running):
+    app, client = running
+    book_id = ready_book(app, "manywords")
+    found = check(client, app, book_id)
+    saved = app.state.library.folder(book_id) / CHECK_FILE
+    if os.name != "nt":
+        assert stat.S_IMODE(saved.stat().st_mode) == 0o600
+    assert [p.name for p in saved.parent.iterdir() if p.name.startswith(".")] == []
+    again = restarted(app)
+    assert again.state.library.words.get(book_id) == found
+    tree = lxml.html.fromstring(visitor(again).get(f"/books/{book_id}/words").text)
+    assert len(tree.xpath("//fieldset[@class='word']")) == WORDS_SHOWN
+    assert texts(tree, "//*[@role='status' and @id='status']") == [
+        "Checked: 60 words the voice doesn't know."
+    ]
+
+
+def test_a_check_dogear_was_closed_during_says_so_after_a_restart(tmp_path):
+    app = sample_app(tmp_path / "web")  # its queues never start, so the check waits
+    book_id = ready_book(app)
+    visitor(app).post(f"/books/{book_id}/words/check")
+    assert app.state.library.words.get(book_id).state == "waiting"
+    found = restarted(app).state.library.words.get(book_id)
+    assert (found.state, found.error, found.hint) == ("failed", CLOSED_ERROR, CHECK_AGAIN)
+    # Saved as failed, so it says the same after another restart.
+    assert restarted(app).state.library.words.get(book_id) == found
+
+
+def test_a_check_stopped_with_the_server_is_gone_after_a_restart(tmp_path, commands):
+    app = sample_app(tmp_path / "web")
+    with visitor(app) as client:
+        book_id = ready_book(app, "slowwords")
+        check(client, app, book_id, "checking")
+    assert not (app.state.library.folder(book_id) / CHECK_FILE).exists()
+    assert restarted(app).state.library.words.get(book_id) is None
+
+
+SAVED_CHECK = (
+    '{"state": "done", "sections": [], "as_english": false, "voice": "", '
+    '"words": [{"word": "Hyde", "count": 2}], "total": 1, "error": "", "hint": ""}'
+)
+
+
+@pytest.mark.parametrize(
+    "saved",
+    [
+        "not json",
+        '{"state": "done"}',
+        SAVED_CHECK.replace('"done"', '"lost"'),
+        SAVED_CHECK.replace('"count": 2', '"count": 0'),
+        SAVED_CHECK.replace('"sections": []', '"sections": [true]'),
+        SAVED_CHECK.replace('"total": 1', '"total": 0'),
+        SAVED_CHECK.replace('"voice": ""', '"voice": 3'),
+        SAVED_CHECK.replace('"as_english": false', '"as_english": "no"'),
+    ],
+)
+def test_a_saved_check_that_cant_be_read_is_left_out(tmp_path, caplog, saved):
+    app = sample_app(tmp_path / "web")
+    book_id = ready_book(app)
+    (app.state.library.folder(book_id) / CHECK_FILE).write_text(saved, encoding="utf-8")
+    assert restarted(app).state.library.words.get(book_id) is None
+    assert "Ignoring the word check" in caplog.text
+
+
+def test_a_saved_check_is_read_back_whole(tmp_path):
+    app = sample_app(tmp_path / "web")
+    book_id = ready_book(app)
+    (app.state.library.folder(book_id) / CHECK_FILE).write_text(SAVED_CHECK, encoding="utf-8")
+    found = restarted(app).state.library.words.get(book_id)
+    assert found == WordCheck("done", words=(UnknownWord("Hyde", 2),), total=1)
+
+
+def test_the_setting_bounds_the_words_kept_and_listed(tmp_path, commands):
+    config = sample_config(tmp_path / "web")
+    config["web"]["max_words_listed"] = 55
+    app = sample_app(tmp_path / "web", config=config)
+    with visitor(app) as client:
+        book_id = ready_book(app, "manywords")
+        found = check(client, app, book_id)
+        assert (len(found.words), found.total) == (55, 60)
+        html, tree = page(client, book_id)
+        assert "10 more words aren&#39;t listed." in html
+        assert tree.xpath("//a[text()='Show the 55 most frequent words']/@href") == [
+            f"/books/{book_id}/words/all"
+        ]
+        html = client.get(f"/books/{book_id}/words/all").text
+        assert "5 more words aren&#39;t listed. Each comes up 46 times or fewer." in html
+    config["web"]["max_words_listed"] = 20  # lowered since: the saved check is cut to it
+    again = sample_app(tmp_path / "web", config=config)
+    kept = again.state.library.words.get(book_id)
+    assert (len(kept.words), kept.total) == (20, 60)
+    tree = lxml.html.fromstring(visitor(again).get(f"/books/{book_id}/words").text)
+    assert len(tree.xpath("//fieldset[@class='word']")) == 20
+    assert not tree.xpath("//a[starts-with(text(), 'Show')]")
+
+
+def test_every_word_can_be_listed_heard_and_saved(running):
+    app, client = running
+    book_id = ready_book(app, "manywords")
+    check(client, app, book_id)
+    path = f"/books/{book_id}/words/all"
+    html = client.get(path).text
+    tree = lxml.html.fromstring(html)
+    assert "<title>All words to check: The Strange Case" in html
+    assert len(tree.xpath("//fieldset[@class='word']")) == 60
+    assert "aren&#39;t listed" not in html
+    assert tree.xpath("//a[text()='Show only the 50 most frequent words']/@href") == [
+        f"/books/{book_id}/words"
+    ]
+    [listen] = tree.xpath("//form[@id='listen-55']")
+    assert dict(listen.form_values())["back"] == f"{path}#word-55"
+    form = save_form(client, path)
+    assert form["word-55"] == "Name54"
+    form["say-55"] = "name fifty four"
+    response = client.post(path, data=form, follow_redirects=False)
+    assert response.headers["location"] == f"{path}?saved=1"
+    assert [(e.word, e.sounds_like) for e in app.state.page_words.entries()] == [
+        ("Name54", "name fifty four")
+    ]
+    assert "Saved. Choose Listen" in client.get(f"{path}?saved=1").text
+
+
+def test_a_word_changed_elsewhere_is_caught_on_the_all_words_page(running):
+    app, client = running
+    book_id = ready_book(app, "manywords")
+    check(client, app, book_id)
+    path = f"/books/{book_id}/words/all"
+    html = changed_elsewhere(
+        client, path, "Name57", "name", lambda: app.state.page_words.save({"Name57": "nayme"})
+    )
+    assert "Name57 was changed in another window since this page was opened." in html
+    assert [(e.word, e.sounds_like) for e in app.state.page_words.entries()] == [
+        ("Name57", "nayme")
+    ]
+    tree = lxml.html.fromstring(html)
+    assert tree.xpath("//form[@method='post' and @novalidate]/@action") == [path]
+
+
+def test_the_all_words_page_needs_the_cookie_and_dogears_own_forms(running):
+    app, client = running
+    book_id = ready_book(app)
+    stranger = visitor(app, signed_in=False)
+    assert stranger.get(f"/books/{book_id}/words/all").status_code == 403
+    response = client.post(
+        f"/books/{book_id}/words/all",
+        data={"word-1": "Hyde", "say-1": "x"},
+        headers={"Origin": "http://evil.example"},
+    )
+    assert response.status_code == 403
+    assert app.state.page_words.entries() == []

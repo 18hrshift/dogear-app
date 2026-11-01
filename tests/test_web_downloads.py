@@ -10,9 +10,10 @@ import zipfile
 import pytest
 from web_samples import CHOSEN, add_book, sample_app, sample_summary, visitor
 
+from dogear.sizes import describe_size
 from dogear.web import making
 from dogear.web.books import Output
-from dogear.web.downloads import NotAvailable, describe_size, output_path, zip_folder
+from dogear.web.downloads import NotAvailable, output_path, zip_folder
 
 
 @pytest.fixture

@@ -3,6 +3,10 @@
 The child's JSON is checked field by field before anything uses it, and bounded: a book
 can't make the server keep more than MAX_OUTLINE_BYTES of it, or list more than
 MAX_SECTIONS sections on a page.
+
+Reading a scanned PDF means reading it with OCR first, which can take many minutes. The
+child reports how that goes, and its lines are kept as the book's progress lines
+(progress.py), as making keeps them, for the book's page to show.
 """
 
 from __future__ import annotations
@@ -20,6 +24,9 @@ MAX_SECTIONS = 3000
 MAX_TITLE_CHARS = 300  # longer titles are cut for the page
 INTERRUPTED_ERROR = "Something stopped Dogear while it was reading this book."
 READ_AGAIN_HINT = "Choose Read again."
+# How the lines start that say why a `dogear` command failed. They are the error the
+# page shows, not progress.
+PROBLEM_PREFIXES = ("Error: ", "What to do: ")
 
 
 @dataclass(frozen=True)
@@ -35,22 +42,35 @@ def read_book(store: BookStore, settings: WebSettings, book_id: str, stopper: St
         return
     source = store.folder(book_id) / record.source_name
     command = child_command(["outline", str(source), "--json"], settings.config_file)
-    result = run_captured(
-        command,
-        timeout=settings.read_timeout_seconds,
-        max_stdout=MAX_OUTLINE_BYTES,
-        stopper=stopper,
-    )
+
+    def heard(line: str) -> None:
+        if stopper.requested.is_set():
+            return  # what's left is `dogear`'s goodbye, written for a terminal
+        if line.strip() and not line.startswith(PROBLEM_PREFIXES):
+            store.add_line(book_id, line)  # a full disk is logged, and reading goes on
+
+    store.clear_lines(book_id)
+    try:
+        result = run_captured(
+            command,
+            timeout=settings.read_timeout_seconds,
+            max_stdout=MAX_OUTLINE_BYTES,
+            stopper=stopper,
+            on_line=heard,
+        )
+    finally:
+        store.save_lines(book_id)
     if stopper.requested.is_set():
-        # It's being deleted, or the server is stopping. Then it stays "reading", and
-        # the server reads it again when it next starts.
+        # Stopped from its page, and Library.stop has said so in its record. Or it's
+        # being deleted, or the server is stopping: then it stays "reading", and the
+        # server reads it again when it next starts.
         return
     if result.timed_out:
         outcome: BookSummary | Problem = Problem(
-            f"Reading the book took longer than {settings.read_timeout_seconds:g} seconds, "
-            "so Dogear stopped.",
-            "If the book is very long, raise web.read_timeout_seconds in your config file "
-            "and try again.",
+            f"Dogear went {settings.read_timeout_seconds:g} seconds without any progress "
+            "reading this book, so it stopped.",
+            "Choose Read again. If this keeps happening, raise web.read_timeout_seconds in "
+            "your config file.",
         )
     elif interrupted(result.returncode):
         # Stopped by something other than the server: not a problem with the book.
@@ -88,11 +108,12 @@ def parse_outline(data: bytes) -> BookSummary | Problem:
 def problem_from_output(output: str) -> Problem:
     """The `Error:` and `What to do:` lines a failed `dogear` command printed."""
     error = hint = ""
+    error_prefix, hint_prefix = PROBLEM_PREFIXES
     for line in output.splitlines():
-        if line.startswith("Error: "):
-            error = line.removeprefix("Error: ")
-        elif line.startswith("What to do: "):
-            hint = line.removeprefix("What to do: ")
+        if line.startswith(error_prefix):
+            error = line.removeprefix(error_prefix)
+        elif line.startswith(hint_prefix):
+            hint = line.removeprefix(hint_prefix)
     if not error:
         return Problem(
             "Dogear stopped because of a problem it didn't expect.",

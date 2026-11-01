@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import logging
-import zipfile
-import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import TracebackType
 
 from lxml import etree
 
 from dogear.document import Metadata
 from dogear.errors import ExtractionError
-from dogear.extract.safe_xml import parse_xml
 from dogear.extract.xhtml import plain_text, resolve_href
+from dogear.extract.zip_archive import ZipArchive
 
 log = logging.getLogger(__name__)
 
@@ -31,71 +28,17 @@ DAMAGED_HINT = (
 )
 
 
-class EpubArchive:
-    """Read-only access to the files inside an EPUB. Nothing is unpacked to disk.
-
-    No file is read past `max_member_bytes`, so a tiny archive that unpacks to gigabytes
-    (a zip bomb) fails with an error instead of exhausting memory.
-    """
+class EpubArchive(ZipArchive):
+    """Read-only access to the files inside an EPUB, as `ZipArchive` describes."""
 
     def __init__(self, path: Path, *, max_member_bytes: int) -> None:
-        try:
-            self._zip = zipfile.ZipFile(path)
-        except zipfile.BadZipFile:
-            raise ExtractionError(
-                f"{path.name} can't be opened as an EPUB because it isn't a ZIP archive.",
-                hint=DAMAGED_HINT,
-            ) from None
-        self.name = path.name
-        self._members = frozenset(self._zip.namelist())
-        self._max_bytes = max_member_bytes
-
-    def __enter__(self) -> EpubArchive:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self._zip.close()
-
-    def has(self, member: str) -> bool:
-        return member in self._members
-
-    def read(self, member: str) -> bytes:
-        if member not in self._members:
-            raise ExtractionError(f"{member} is missing from {self.name}.", hint=DAMAGED_HINT)
-        if self._zip.getinfo(member).file_size > self._max_bytes:
-            raise self._too_large(member)
-        try:
-            with self._zip.open(member) as f:
-                # The size in the archive's header is the file's own claim, so don't trust
-                # it: read at most one byte past the limit. Data is inflated in small
-                # chunks, so memory stays bounded however far the member would expand.
-                data = f.read(self._max_bytes + 1)
-        except (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError, RuntimeError) as e:
-            raise ExtractionError(
-                f"{member} in {self.name} can't be read ({e}).", hint=DAMAGED_HINT
-            ) from None
-        if len(data) > self._max_bytes:
-            raise self._too_large(member)
-        return data
-
-    def _too_large(self, member: str) -> ExtractionError:
-        limit_mb = self._max_bytes / (1024 * 1024)
-        return ExtractionError(
-            f"{member} in {self.name} unpacks to more than {limit_mb:g} MB, far more than "
-            "a book's text needs, so Dogear stopped reading it.",
-            hint=(
-                "The file may be damaged or built to exhaust memory (a 'zip bomb'). If it's "
-                "a genuine book, raise epub.max_member_mb in your config file."
-            ),
+        super().__init__(
+            path,
+            max_member_bytes=max_member_bytes,
+            kind="an EPUB",
+            damaged_hint=DAMAGED_HINT,
+            limit_setting="epub.max_member_mb",
         )
-
-    def parse(self, member: str) -> etree._Element:
-        return parse_xml(self.read(member), f"{member} in {self.name}", DAMAGED_HINT)
 
 
 @dataclass(frozen=True)

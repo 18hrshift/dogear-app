@@ -79,13 +79,88 @@ jobs:
           test "$chapters" -eq 2
           ls out/*MP3*
 
+  piper:
+    # The Piper voice engine plugin (plugins/piper), installed beside Dogear: its own tests,
+    # one of them with a real Piper voice (downloaded once, cached between runs), then a
+    # short audiobook spoken with that voice. piper-tts has wheels for all three systems.
+    name: Piper plugin, ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.13"
+      - name: Install ffmpeg, Tesseract, and eSpeak NG
+        timeout-minutes: 10
+        uses: ./.github/actions/install-tools
+      - name: Restore the Piper voice
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/dogear-piper-models
+          key: dogear-piper-models-${{ runner.os }}-${{ hashFiles('plugins/piper/src/dogear_piper/catalog.toml') }}
+      - name: Download the voice
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          printf "[models]\ndir = '%s'\n" "${{ runner.temp }}/dogear-piper-models" > voice.toml
+          uv run --frozen --with-editable ./plugins/piper \
+            dogear download --config voice.toml --voice piper:en_US-ljspeech-high
+      - name: Test the plugin
+        shell: bash
+        env:
+          DOGEAR_PIPER_TEST_MODELS: ${{ runner.temp }}/dogear-piper-models
+        run: uv run --frozen --with-editable ./plugins/piper pytest plugins/piper/tests
+      - name: Make a short audiobook
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          uv run --frozen --with-editable ./plugins/piper dogear make tests/fixtures/*.epub \
+            --config voice.toml --voice piper:en_US-ljspeech-high --sections 1-2 --format m4b -o out
+      - name: Check the output
+        shell: bash
+        run: |
+          chapters=$(ffprobe -v error -show_chapters -of csv=p=0 out/*.m4b | wc -l)
+          echo "M4B chapters: $chapters"
+          # Section 1 is the book's own title page, so there is no separate title track.
+          test "$chapters" -eq 2
+
+  openai-speech:
+    # The speech service plugin (plugins/openai_speech), installed beside Dogear: its own
+    # tests, against a fake speech service on the runner, one of them making a short
+    # audiobook through it. No network service is called and no key is needed, so the job
+    # has no secrets.
+    name: Speech service plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DOGEAR_REQUIRE_TOOLS: ffmpeg,ffprobe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.13"
+      - name: Install ffmpeg, Tesseract, and eSpeak NG
+        timeout-minutes: 10
+        uses: ./.github/actions/install-tools
+      - name: Test the plugin
+        shell: bash
+        run: uv run --frozen --with-editable ./plugins/openai_speech pytest plugins/openai_speech/tests
+
   talking-books:
     # Talking books checked by the standard validators: EPUBCheck and Ace by DAISY for
     # EPUB 3, DAISY Pipeline 2 for DAISY 2.02. Two sections of the fixture, spoken with
     # the real voice, plus sample books with a humming fake voice that between them use
     # every kind of block and every narration choice.
     name: Talking books
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: on Ubuntu 26.04 runners, DAISY Pipeline 2's command-line client (a
+    # 32-bit Go program in its Docker image) can't open a socket ("function not
+    # implemented"), so no book can be sent to the validator. 24.04 runs it.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

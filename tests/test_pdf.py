@@ -161,6 +161,8 @@ def test_unknown_method_fails_before_reading(tmp_path, config):
         ("column_min_width_ratio", 0),
         ("image_min_page_share", 0),
         ("image_min_page_share", 1.5),
+        ("scanned_image_min_page_share", 0),
+        ("scanned_image_min_page_share", 1.5),
     ],
 )
 def test_out_of_range_settings(tmp_path, config, key, value):

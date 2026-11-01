@@ -108,8 +108,8 @@ def say_aloud(
     if result.timed_out:
         return _failed(
             listen,
-            f"Saying it took longer than {settings.read_timeout_seconds:g} seconds, so Dogear "
-            "stopped.",
+            f"Dogear went {settings.read_timeout_seconds:g} seconds without any progress "
+            "saying it, so it stopped.",
             "Try a shorter text. If this was the first time, the voice may still have been "
             "downloading: try again.",
         )

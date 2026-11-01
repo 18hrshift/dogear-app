@@ -7,6 +7,10 @@
 base_url = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231"
 sample_rate = 24000
 max_phonemes = 510  # the model's context, not counting the start and end markers
+# About how many words a minute Kokoro says at speed 1.0, with Dogear's pauses: what Dogear
+# estimates a book's length from, before speaking it. Jekyll and Hyde (26,328 words) at
+# speed 0.9 came to 2 hours 33 minutes, 172 words a minute.
+words_per_minute = 190
 
 [kokoro.tokenizer]
 path = "tokenizer.json"
@@ -64,3 +68,6 @@ url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_s
 sha256 = "1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85"
 size = 12806118
 model_dir = "en_core_web_sm/en_core_web_sm-3.8.0"
+# The model folder once unpacked, for `dogear download --check`: the SHA-256 of a line per
+# file, "<SHA-256>  <path in the folder>", sorted by path (downloads.folder_sha256).
+model_sha256 = "c5f8f24316f1ae15179131e1fab8bf23cf39488a9b7620478a7535c4d8b654cc"

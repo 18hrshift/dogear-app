@@ -28,7 +28,6 @@ chapters begin; the reading order (the spine) says what to read. The rules:
 
 from __future__ import annotations
 
-import itertools
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
@@ -40,6 +39,7 @@ from dogear.errors import ExtractionError
 from dogear.extract.epub_kind import marked_kind
 from dogear.extract.epub_nav import Navigation, TocEntry
 from dogear.extract.epub_package import DAMAGED_HINT, XHTML_MEDIA_TYPE, EpubArchive, Package
+from dogear.extract.stretches import carry_page_markers
 from dogear.extract.xhtml import lang_of
 from dogear.extract.xhtml_blocks import body_blocks
 from dogear.extract.xhtml_split import split_body
@@ -333,7 +333,7 @@ class _FileReader:
             )
             for part, (fragment, entry) in zip(bodies, starts, strict=True)
         ]
-        _carry_page_markers(stretches)
+        carry_page_markers([s.blocks for s in stretches])
         return stretches
 
 
@@ -368,19 +368,3 @@ def _cut_points(
             chosen[position] = (el, entry)
     top = chosen.pop(0, (body, None))[1]
     return top, [chosen[p] for p in sorted(chosen)]
-
-
-def _carry_page_markers(stretches: list[_Stretch]) -> None:
-    """Move page markers that end a stretch to the start of the next one.
-
-    A page that begins just before a cut begins with the next stretch's first words.
-    """
-    for before, after in itertools.pairwise(stretches):
-        if all(isinstance(b, PageMarker) for b in after.blocks):
-            continue  # nothing there for the page to begin with
-        count = 0
-        while count < len(before.blocks) and isinstance(before.blocks[-1 - count], PageMarker):
-            count += 1
-        if count:
-            after.blocks[:0] = before.blocks[-count:]
-            del before.blocks[-count:]

@@ -4,8 +4,8 @@
 
 <h2>Make a book</h2>
 <ol>
-  <li>On Your books, choose a book file and upload it. Dogear reads EPUB, PDF, MOBI, and AZW3 files.</li>
-  <li>Dogear reads the book to find its chapters. Then choose what to make, the voice, the speed, and which sections to read.</li>
+  <li>On Your books, choose a book file and upload it. Dogear reads {{ book_formats }} files.</li>
+  <li>Dogear reads the book to find its chapters. Then choose what to make, the voice, the speed, and which sections to read. A scanned PDF takes longer, a few seconds a page, because Dogear first reads the words in the pictures of its pages (OCR). The book's page says how far it has got.</li>
   <li>Choose Start making. A long book takes hours. The book's page says how far it has got, and you can close the page and come back.</li>
   <li>When it's ready, download what Dogear made from the book's page.</li>
 </ol>
@@ -20,7 +20,7 @@
 <h2>Fix how a word is said</h2>
 <p>The voice reads most English well, but can say names and made-up words wrong. To fix them:</p>
 <ol>
-  <li>Before making a book, or on its page once it's made, choose "check how words are said". Dogear lists the words the voice doesn't know, most frequent first.</li>
+  <li>Before making a book, or on its page once it's made, choose "check how words are said". Dogear lists the words the voice doesn't know, most frequent first: the 50 that come up most, with a link to show the rest. The list stays with the book, even after Dogear restarts.</li>
   <li>Choose Listen beside a word to hear how the voice says it.</li>
   <li>If it sounds wrong, write how it sounds in "Say it like", with ordinary words or parts of words: Utterson as "utter son", say. Choose Save, then Listen again.</li>
   <li>Make the book, or make it again. Dogear uses your spellings in every book.</li>
@@ -30,9 +30,14 @@
 
 <h2>If Dogear can't read a book</h2>
 <p>The book's page says why, and what to do. Once that's done (for a Kindle book, say, installing Calibre), choose Read again on the book's page.</p>
+<p>A scanned PDF needs the free program Tesseract, which reads the words in the pictures of its pages. Dogear's installers don't include it, so if the page says it's missing, install it on the computer running Dogear, then choose Read again.</p>
+
+<h2>If there isn't room for a book</h2>
+<p>Before it speaks anything, Dogear checks that the computer has room for the book. If it doesn't, the book's page says how much space the book needs and how much is free. Free up some space, or choose fewer sections or kinds of book, then start it again.</p>
 
 <h2>Stopping and starting again</h2>
 <p>Stopping a book is safe. Every sentence Dogear has spoken is kept, so Start again carries on where it stopped.</p>
+<p>Stopping while Dogear reads a scanned PDF is safe too. Every page it has read is kept, so Read again carries on with the next one.</p>
 <p>Dogear makes one book at a time. Other books wait their turn.</p>
 
 <h2>Using Dogear from a phone</h2>

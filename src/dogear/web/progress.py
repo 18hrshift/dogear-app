@@ -1,14 +1,15 @@
-"""A book's progress lines while it is made, kept apart from its record.
+"""A book's progress lines while it is read or made, kept apart from its record.
 
-`dogear make` prints a line or two per section, and some books add a warning per element
-(a note without an id, a word with no pronunciation): thousands of lines. So:
+`dogear make` prints a line or two per section, `dogear outline` a line every few pages
+while it reads a scanned PDF with OCR, and some books add a warning per element (a note
+without an id, a word with no pronunciation): thousands of lines. So:
 
 - a line that repeats the one before it adds to that line's count ("... (412 times)"),
 - only the latest MAX_KEPT lines are kept, and the page says how many came before them,
 - the lines are saved in the book's folder (`progress.json`) at most every
-  SAVE_EVERY_SECONDS and when making ends, not with every line. A line that arrives
-  between saves is lost only if the server itself dies, and a save that fails (a full
-  disk) is logged and doesn't stop the book.
+  SAVE_EVERY_SECONDS and when reading or making ends, not with every line. A line that
+  arrives between saves is lost only if the server itself dies, and a save that fails (a
+  full disk) is logged and doesn't stop the book.
 """
 
 from __future__ import annotations

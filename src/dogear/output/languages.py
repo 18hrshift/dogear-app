@@ -2,6 +2,8 @@
 
 Books carry BCP 47 tags such as "en" or "en-GB". MP4 stores a language as three letters
 (ISO 639-2/T) and ffmpeg ignores anything else, so two-letter codes are looked up here.
+The table also turns a three-letter code back into two letters, so a book marked "eng"
+matches a voice marked "en-US".
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ _TWO_TO_THREE = dict(
     """.split()
 )
 
+_THREE_TO_TWO = {three: two for two, three in _TWO_TO_THREE.items()}
+
 # Codes that say "no particular language", which are better left out.
 _NO_LANGUAGE = {"und", "mul", "zxx", "mis"}
 
@@ -43,3 +47,10 @@ def iso639_2(tag: str | None) -> str | None:
     if len(primary) == 3 and primary.isascii() and primary.isalpha():
         return None if primary in _NO_LANGUAGE else primary
     return None
+
+
+def two_letter(code: str) -> str:
+    """'eng' -> 'en': a language code as its two-letter ISO 639-1 code where it has one,
+    lowercase; any other code as it is, lowercase."""
+    code = code.lower()
+    return _THREE_TO_TWO.get(code, code)

@@ -31,6 +31,10 @@ from dogear.web.settings import LOCAL_HOST, WebSettings, web_settings
 GRACEFUL_SECONDS = 5  # for open connections to finish when stopping
 # In the web folder, locked while a server uses the folder.
 LOCK_FILE = "serve.lock"
+USE_THIS_ADDRESS = (
+    "On a phone or another computer on the same network, open the link above with this "
+    "computer's network address in place of 127.0.0.1."
+)
 
 
 @dataclass(frozen=True)
@@ -58,14 +62,7 @@ def _serve(
     local = start_link(LOCAL_HOST, settings.port, key)
     say(f"Dogear is running. Open this link in a web browser: {local}")
     if settings.lan:
-        address = lan_address()
-        if address:
-            say(
-                "On a phone or another computer on the same network, open: "
-                f"{start_link(address, settings.port, key)}"
-            )
-        else:
-            say("Dogear couldn't find this computer's address on the network.")
+        say(network_link(settings, key))
         say("Anyone on this network who has the link can use Dogear.")
     say(f"Books, what's made from them, and the access key are kept in {settings.dir}")
     say("Keep this window open while you use Dogear. Press Ctrl+C to stop.")
@@ -136,6 +133,21 @@ def bind(settings: WebSettings) -> socket.socket:
 
 def start_link(host: str, port: int, key: AccessKey) -> str:
     return f"http://{host}:{port}/start?key={key.text}"
+
+
+def network_link(settings: WebSettings, key: AccessKey) -> str:
+    """What other devices on the network should open: a link with the address this
+    computer finds for itself, unless web.show_network_address is off (in a container,
+    where that is the container's own), or none is found."""
+    if not settings.show_network_address:
+        return USE_THIS_ADDRESS
+    address = lan_address()
+    if address is None:
+        return f"Dogear couldn't find this computer's address on the network. {USE_THIS_ADDRESS}"
+    return (
+        "On a phone or another computer on the same network, open: "
+        f"{start_link(address, settings.port, key)}"
+    )
 
 
 def lan_address() -> str | None:

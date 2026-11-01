@@ -50,10 +50,14 @@ web page. When frozen, `dogear serve` runs each book as a child process with
    `build/packaging/programs` and reused until the script or a pin changes.
 3. **freeze:** PyInstaller freezes `entry.py` (which calls `dogear.cli.main`) into a folder,
    `dist/dogear`, with its contents in `dist/dogear/_internal`. A folder, not one file, so
-   the 800 MB bundle isn't unpacked again on every start.
+   the 800 MB bundle isn't unpacked again on every start. Dogear's own package metadata
+   goes in too, because Dogear finds Kokoro through its entry points
+   (`docs/voice-engines.md`). Only Dogear's: a voice engine plugin installed where the
+   build runs is never frozen, and the smoke test fails if `dogear voices` lists one.
 4. **voice, assemble:** copy the programs into `_internal/bundled/tools`, and the default
-   voice into `_internal/bundled/models`: the Kokoro build `[kokoro] model` and the voice
-   `[voice] voice` from `defaults.toml`, the tokenizer, and spaCy's English model, all
+   voice into `_internal/bundled/models`: the Kokoro build `model` from
+   `src/dogear/voice/kokoro.toml` and the voice `[voice] voice` from `defaults.toml`
+   (whose engine must be Kokoro), the tokenizer, and spaCy's English model, all
    checked against `src/dogear/voice/catalog.toml`. `models/manifest.json` records each
    file's SHA-256. Then `LICENSE.txt` and `THIRD-PARTY-NOTICES.txt` go beside the program.
 5. **notices:** `THIRD-PARTY-NOTICES.txt` lists every bundled part with its license text:

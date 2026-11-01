@@ -1,0 +1,43 @@
+[project]
+name = "dogear-piper"
+version = "0.1.0"
+description = "Piper voices for Dogear, the open talking-book maker."
+readme = "README.md"
+# GPL, because it uses piper-tts (GPL-3.0-or-later, with eSpeak NG built in). That is
+# why Piper is a separate package: Dogear itself is Apache-2.0 and never imports it.
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Dogear contributors" }]
+keywords = ["accessibility", "audiobook", "text-to-speech", "piper", "dogear"]
+# Dogear itself isn't listed: install this into the same environment as Dogear, as the
+# README says. The name "dogear" on PyPI belongs to an unrelated tool, so listing it
+# could install that instead.
+dependencies = [
+    "piper-tts==1.8.*",  # GPL-3.0-or-later: Piper, with eSpeak NG built in. Its voice
+                         # and phonemizer classes are used directly, so it's pinned.
+    "onnxruntime>=1.20",  # MIT
+    "numpy>=1.26",        # BSD-3-Clause
+]
+
+[project.urls]
+Homepage = "https://github.com/18hrshift/dogear-app/tree/main/plugins/piper"
+Issues = "https://github.com/18hrshift/dogear-app/issues"
+
+# How Dogear finds the engine: see docs/voice-engines.md in Dogear.
+[project.entry-points."dogear.engines"]
+piper = "dogear_piper.plugin:ENGINE"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dogear_piper"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+extend = "../../pyproject.toml"

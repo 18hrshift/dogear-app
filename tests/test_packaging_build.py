@@ -13,8 +13,8 @@ from dogear_build.pins import load
 
 from dogear import bundle
 from dogear.voice import downloads as downloads_module
-from dogear.voice import prepare_kokoro, prepare_spacy
 from dogear.voice.catalog import catalog
+from dogear.voice.kokoro_plugin import prepare_kokoro, prepare_spacy
 
 # Programs.
 
@@ -64,6 +64,19 @@ def test_pyinstaller_arguments(tmp_path, monkeypatch):
     assert "--strip" not in args  # it broke numpy's OpenBLAS in the Linux container
     collected = [args[i + 1] for i, a in enumerate(args) if a == "--collect-data"]
     assert collected == freeze.COLLECT_DATA
+
+
+def test_only_dogears_own_packages_and_metadata_are_frozen(tmp_path):
+    """Kokoro is found through Dogear's entry points, so Dogear's metadata goes in. A
+    voice engine plugin installed in the build's environment never does."""
+    args = freeze.arguments(tmp_path / "work", tmp_path / "dist")
+
+    def given(option):
+        return [args[i + 1] for i, a in enumerate(args) if a == option]
+
+    assert given("--copy-metadata") == ["dogear"]
+    assert given("--collect-submodules") == ["dogear"]
+    assert not any(a.startswith(("--collect-all", "--recursive-copy-metadata")) for a in args)
 
 
 def test_the_entry_point_runs_the_dogear_command():

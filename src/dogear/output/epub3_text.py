@@ -110,7 +110,7 @@ def _table(parent: etree._Element, table: TableText) -> None:
 
 def _sentences(parent: etree._Element, sentences: tuple[Sentence, ...]) -> None:
     for n, sentence in enumerate(sentences):
-        span = add(parent, "span", {"id": sentence.id}, sentence.text)
+        span = _lang(add(parent, "span", {"id": sentence.id}, sentence.text), sentence.lang)
         if n < len(sentences) - 1:
             span.tail = " "
 

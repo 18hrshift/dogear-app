@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+from dogear.extract.pdf_images import Box, image_boxes, image_page_share
 from dogear.extract.pdf_text import (
     Figure,
     Line,
@@ -37,7 +38,6 @@ Char = dict[str, Any]
 # between words without a character behind it; one character can give several letters
 # ("ﬁ" gives "f" and "i").
 Cell = tuple[str, Char | None]
-Box = tuple[float, float, float, float]  # x0, top, x1, bottom
 
 # Font names such as "Times-Bold", "ABCDEF+Minion-Semibold", or "Arial-BlackItalic".
 _BOLD_FONT = re.compile(r"bold|black|heavy|demi", re.IGNORECASE)
@@ -72,24 +72,15 @@ def read_page(plumber_page: Any, index: int, label: str, settings: ReadSettings)
         lines=lines,
         has_images=bool(plumber_page.images),
         figures=_figures(plumber_page, lines, settings.image_min_page_share),
+        image_page_share=image_page_share(plumber_page),
     )
 
 
 def _figures(plumber_page: Any, lines: Sequence[Line], min_share: float) -> tuple[Figure, ...]:
     x0, top, x1, bottom = plumber_page.bbox
     page_area = (x1 - x0) * (bottom - top)
-    boxes = []
-    for image in plumber_page.images:
-        box = (
-            max(image["x0"], x0),
-            max(image["top"], top),
-            min(image["x1"], x1),
-            min(image["bottom"], bottom),
-        )
-        if box[0] < box[2] and box[1] < box[3]:  # some of it is on the page
-            boxes.append(box)
     figures = []
-    for box in _merge_overlapping(boxes):
+    for box in _merge_overlapping(image_boxes(plumber_page)):
         if _area(box) < min_share * page_area:
             log.debug(
                 "Page %d: skipped a small image, taken as decoration", plumber_page.page_number

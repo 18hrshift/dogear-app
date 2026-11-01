@@ -4,6 +4,7 @@ the file ends up."""
 import errno
 import os
 
+import lxml.html
 import pytest
 from web_samples import sample_app, sample_config, visitor
 
@@ -61,15 +62,30 @@ def test_a_path_in_the_name_is_dropped(app):
     assert book.original_name == "x.epub"
 
 
-@pytest.mark.parametrize("name", ["notes.txt", "book.epub.exe", "README", "book.docx"])
+@pytest.mark.parametrize("name", ["notes.txt", "book.epub.exe", "README", "book.doc", "x.odt"])
 def test_only_books_dogear_reads_are_accepted(app, name):
     response = visitor(app).post("/books", files={"book": (name, b"ok", "text/plain")})
     assert response.status_code == 400
     assert "<title>Error: Your books - Dogear</title>" in response.text
-    assert "Choose an EPUB, PDF, MOBI, or AZW3 file." in response.text
+    assert "Choose an EPUB, PDF, Word (DOCX), HTML, Markdown, MOBI, or AZW3 file." in response.text
     assert 'aria-describedby="book-file-hint book-file-error"' in response.text
     assert books(app) == []
     assert incoming(app) == []
+
+
+@pytest.mark.parametrize(
+    "name", ["Story.MOBI", "Notes.DOCX", "page.html", "page.htm", "doc.xhtml", "a.md"]
+)
+def test_every_kind_dogear_reads_is_accepted(app, name):
+    response = visitor(app).post("/books", files={"book": (name, b"ok", "")})
+    assert response.status_code == 200  # followed to the book's page
+    [book] = books(app)
+    assert book.original_name == name
+
+
+def test_the_help_page_names_every_kind(app):
+    page = visitor(app).get("/help").text
+    assert "Dogear reads EPUB, PDF, Word (DOCX), HTML, Markdown, MOBI, and AZW3 files." in page
 
 
 def test_no_file_chosen_is_an_error(app):
@@ -134,9 +150,18 @@ def test_a_file_just_under_the_limit_is_accepted(app):
 
 def test_the_upload_form_names_the_kinds_and_the_limit(app):
     page = visitor(app).get("/").text
-    assert 'accept=".azw,.azw3,.epub,.mobi,.pdf"' in page
-    assert "up to 1 MB" in page
+    assert "An EPUB, PDF, Word (DOCX), HTML, Markdown, MOBI, or AZW3 file, up to 1 MB." in page
     assert '<label for="book-file">Book file (required)</label>' in page
+
+
+def test_the_file_picker_lets_every_kind_of_book_be_chosen(app):
+    """No accept list: iPhones grey out files whose extension iOS has no type for, such
+    as MOBI and AZW3, and the server checks the name instead."""
+    [picker] = lxml.html.fromstring(visitor(app).get("/").text).xpath("//input[@type='file']")
+    assert picker.get("accept") is None
+    for name in ("book.mobi", "book.azw3", "book.AZW"):
+        response = visitor(app).post("/books", files={"book": (name, b"ok", "")})
+        assert response.status_code == 200, name  # followed to the book's page
 
 
 class FailingFile:

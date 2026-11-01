@@ -125,12 +125,34 @@ Goal: a helper with no Python experience can make a book.
 
 ## Phase 4: More voices and languages
 
-- [ ] Voice engines as plugins. Candidates checked 2026-10-24 (re-check before building):
-      Piper (fastest on CPU, many languages, GPL-3.0, so it ships as a separate optional
-      package), OmniVoice (Apache-2.0, 600+ languages), Qwen3-TTS (Apache-2.0), Chatterbox (MIT).
-- [ ] Cloud voices as opt-in plugins with a clear privacy warning.
-- [ ] Language detection per section, so a French quote in an English book gets a French voice.
-- [ ] More inputs: DOCX, HTML, Markdown, MOBI/AZW3 via Calibre, automatic OCR for scanned PDFs.
+- [x] Voice engines as plugins, through the `dogear.engines` entry points, Kokoro included.
+      The first plugin is Piper (`plugins/piper/`, GPL-3.0, so a separate package), with
+      voices trained only on recordings anyone may use. Candidates re-checked 2026-10-30
+      (see [`docs/voice-engines.md`](docs/voice-engines.md)): OmniVoice's weights turned
+      out to be non-commercial, and Qwen3-TTS and Chatterbox are too slow on a CPU. Pocket
+      TTS (MIT code, CC BY weights) is the best candidate for a second plugin.
+- [x] Cloud voices as opt-in plugins with a clear privacy warning. Dogear itself refuses a
+      voice that sends text off the computer unless `[voice] allow_cloud` or `--allow-cloud`
+      says yes, and names the host first. The first plugin speaks the OpenAI-compatible
+      speech API (`plugins/openai_speech/`), which local servers speak too. Its default is
+      OpenAI, whose speech models shut down on 2027-01-06: change the default before then.
+- [x] Language detection per section, so a French quote in an English book gets a French voice.
+      Built per passage: `[voice.languages]` gives each language a voice, the book's own
+      language marks come first, and `[language_detection]` (py3langid, off by default)
+      guesses the rest. Narration words in French, German, and Spanish. Known limits: the
+      volume is evened per chapter, not per voice, and no native speaker has checked the
+      word tables yet.
+- [x] More inputs: DOCX, HTML, Markdown, MOBI/AZW3 via Calibre, automatic OCR for scanned PDFs.
+      The installers don't include Tesseract (the Docker image does).
+- [x] Read mixed searchable and scanned PDFs: OCR only textless pages whose raster images
+      cover most of the page, preserving searchable pages, bookmarks, and print-page labels. The
+      selected pages resume after a stop and have their own cache. Known limits: scans
+      with some searchable text (even just a page number) need `dogear ocr` first.
+- [x] Detect scanned pages stored as multiple image tiles, measuring their combined
+      raster coverage without counting overlaps twice or filling gaps between pictures.
+- [x] Keep navigation in the PDF `dogear ocr` saves: internal bookmarks and their hierarchy,
+      print-page labels, and the book's language, alongside its title and author. Damaged
+      metadata is reported by part; usable metadata is still kept.
 
 ## Ground rules for every phase
 

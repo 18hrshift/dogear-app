@@ -23,10 +23,11 @@ from dogear.voice.downloads import STALE_SECONDS
 STAGING_SUFFIX = ".unpacking"
 
 
-def unpack_spacy_model(models_dir: Path) -> Path:
-    """The unpacked model folder, unpacking the downloaded wheel first if needed. Call it
-    holding the models folder's `download_lock`."""
-    target = spacy_model_dir(models_dir)
+def unpack_spacy_model(models_dir: Path, target: Path | None = None) -> Path:
+    """The unpacked model folder, unpacking the downloaded wheel into it first if needed:
+    `target`, or else the folder Dogear loads the model from. Call it holding the models
+    folder's `download_lock`."""
+    target = target or spacy_model_dir(models_dir)
     if target.is_dir():
         return target
     wheel = spacy_wheel(models_dir).path

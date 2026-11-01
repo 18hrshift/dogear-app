@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from dogear.config import load_config
 from dogear.document import (
     Book,
     Footnote,
@@ -18,7 +19,8 @@ from dogear.document import (
     Section,
     Table,
 )
-from dogear.narration import Utterance, narrate_book, narrate_title
+from dogear.errors import ConfigError
+from dogear.narration import Utterance, has_narration_words, narrate_book, narrate_title
 
 
 def book(*sections: Section, lang: str | None = None) -> Book:
@@ -384,7 +386,9 @@ def test_notes_can_be_skipped(config, narration):
 def test_notes_follow_their_own_language(config):
     note = Footnote("n1", "Écrit en 1886.", lang="fr")
     utterances = narrate(config, Heading(1, "H"), Paragraph("Text.", note_refs=("n1",)), note)
-    assert spoken(utterances)[-1] == "Note: Écrit en mille huit cent quatre-vingt-six."
+    # French words for the structure; the number is left for the French voice to read.
+    assert spoken(utterances)[-1] == "Note: Écrit en 1886."
+    assert utterances[-1].lang == "fr"
 
 
 # Pages.
@@ -405,18 +409,11 @@ def test_pages_can_be_announced(config, narration, pause):
 
 # Languages.
 
-FORTY_TWO = {
-    "en": "I have forty-two cats.",
-    "fr": "I have quarante-deux cats.",
-    "de": "I have zweiundvierzig cats.",
-    "es": "I have cuarenta y dos cats.",
-}
-
 
 @pytest.mark.parametrize(
     ("book_lang", "section_lang", "block_lang", "expected"),
     [
-        (None, None, None, "en"),
+        (None, None, None, None),
         ("fr", None, None, "fr"),
         ("fr", "de", None, "de"),
         ("fr", "de", "es", "es"),
@@ -430,13 +427,23 @@ def test_block_language_beats_section_beats_book(
         "Title", lang=section_lang, blocks=[Paragraph("I have 42 cats.", lang=block_lang)]
     )
     [narration] = narrate_book(book(section, lang=book_lang), config)
-    assert spoken(narration.utterances)[-1] == FORTY_TWO[expected]
+    assert narration.utterances[-1].lang == expected
+
+
+def test_only_english_text_is_spelled_out(config):
+    """Other languages write numbers their own way, and their voices read them."""
+    english = Section("One", blocks=[Paragraph("I have 42 cats.")])
+    french = Section("Deux", lang="fr", blocks=[Paragraph("J'ai 42 chats, soit 1,5 par pièce.")])
+    first, second = narrate_book(book(english, french, lang="en"), config)
+    assert spoken(first.utterances)[-1] == "I have forty-two cats."
+    assert spoken(second.utterances)[-1] == "J'ai 42 chats, soit 1,5 par pièce."
 
 
 def test_spoken_titles_use_the_section_language(config):
     section = Section("Chapitre 12", lang="fr", blocks=[Paragraph("Texte.")])
     [narration] = narrate_book(book(section, lang="en"), config)
-    assert spoken(narration.utterances)[0] == "Chapitre douze."
+    assert spoken(narration.utterances)[0] == "Chapitre 12."
+    assert narration.utterances[1].lang == "fr"
 
 
 # Settings change what is heard.
@@ -627,6 +634,102 @@ def test_title_track_words_come_from_config(config, narration):
     narration["words"]["and"] = "&"
     title_book = Book(Metadata("T", authors=["A", "B"]), [], Path("b.epub"), "epub")
     assert spoken(narrate_title(title_book, config).utterances)[1] == "Written by A & B."
+
+
+# Words in other languages.
+
+
+def structure(config, lang: str | None, section_lang: str | None = None) -> list[str]:
+    """What is said for a book in `lang` with a note, an image, a table, and a page."""
+    config["narration"]["announce_pages"] = True
+    config["narration"]["footnotes"] = "end_of_section"
+    blocks = [
+        Heading(1, "Un"),
+        PageMarker("7"),
+        Paragraph("Texte.", note_refs=("n1",)),
+        Image("Une carte", caption=""),
+        Table((("Nom",), ("Ann",)), header_rows=1),
+        Footnote("n1", "Voir plus loin."),
+    ]
+    section = Section("Un", blocks=blocks, lang=section_lang)
+    [narration] = narrate_book(book(section, lang=lang), config)
+    return spoken(narration.utterances)
+
+
+def test_a_book_in_french_hears_french_words_for_its_structure(config):
+    assert structure(config, "fr") == [
+        "Un.",
+        "Page 7.",
+        "Texte.",
+        "Image: Une carte.",
+        "Tableau.",
+        "Ligne 1: Nom: Ann.",
+        "Notes.",
+        "Note: Voir plus loin.",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("lang", "image", "table", "note"),
+    [
+        ("de-AT", "Bild", "Tabelle", "Anmerkung"),
+        ("es", "Imagen", "Tabla", "Nota"),
+        ("fr-CA", "Image", "Tableau", "Note"),
+    ],
+)
+def test_each_language_uses_its_own_table_most_specific_first(config, lang, image, table, note):
+    said = structure(config, lang)
+    assert said[3].startswith(f"{image}:") and said[4] == f"{table}."
+    assert said[-1].startswith(f"{note}:")
+
+
+def test_a_chapter_in_another_language_uses_that_languages_words(config):
+    assert structure(config, "en", section_lang="de")[4] == "Tabelle."
+
+
+def test_a_language_without_a_table_hears_english_words(config):
+    assert structure(config, "it")[4] == "Table."
+    assert not has_narration_words(config, "it")
+    assert has_narration_words(config, "fr-CA") and has_narration_words(config, None)
+
+
+def test_a_title_track_in_spanish(config):
+    title_book = Book(Metadata("T", authors=["A", "B"], language="es"), [], Path("b.epub"), "epub")
+    assert spoken(narrate_title(title_book, config).utterances)[1] == "Por A y B."
+
+
+def test_a_settings_file_can_add_a_language_and_change_one(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text(
+        '[narration.words.it]\ntable = "Tabella"\n\n[narration.words.fr]\nnote = "Remarque"\n',
+        encoding="utf-8",
+    )
+    config = load_config(path)
+    words = config["narration"]["words"]
+    assert words["it"]["table"] == "Tabella"
+    assert words["it"]["image"] == "Image"  # what it leaves out is English
+    assert words["fr"]["note"] == "Remarque" and words["fr"]["table"] == "Tableau"
+    assert structure(config, "it")[4] == "Tabella."
+    assert has_narration_words(config, "it")
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ('[narration.words.it]\ntabel = "Tabella"\n', "Unknown setting 'narration.words.it.tabel'"),
+        (
+            '[narration.words.Italian]\ntable = "Tabella"\n',
+            "Unknown setting 'narration.words.Italian'",
+        ),
+        ("[narration.words.it]\ntable = 3\n", "'narration.words.it.table' must be text"),
+        ('[narration.words.fr]\ntabel = "x"\n', "Unknown setting 'narration.words.fr.tabel'"),
+    ],
+)
+def test_mistakes_in_word_tables_are_found_as_they_load(tmp_path, text, message):
+    path = tmp_path / "settings.toml"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(ConfigError, match=message):
+        load_config(path)
 
 
 def test_page_markers_before_the_opening_heading_follow_it(config, narration):

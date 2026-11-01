@@ -48,6 +48,9 @@ class Sync:
 class Sentence:
     id: str
     text: str
+    # Set only when it differs from the language of the item it's in: a sentence found
+    # to be in another language than the rest of its paragraph.
+    lang: str | None = None
 
 
 @dataclass(frozen=True)

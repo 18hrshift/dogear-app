@@ -22,9 +22,22 @@ runs:
     - name: Install (Windows)
       if: runner.os == 'Windows'
       shell: bash
+      run: choco install -y --no-progress ffmpeg
+    # Tesseract comes from its Windows builders' own release rather than Chocolatey, whose
+    # feed once answered 406 for it while reporting success. Pinned by SHA-256.
+    - name: Install Tesseract (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
       run: |
-        choco install -y --no-progress ffmpeg tesseract
-        echo "C:\\Program Files\\Tesseract-OCR" >> "$GITHUB_PATH"
+        $exe = Join-Path $env:RUNNER_TEMP "tesseract-setup.exe"
+        $url = "https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe"
+        Invoke-WebRequest -Uri $url -OutFile $exe -MaximumRetryCount 3
+        $expected = "C885FFF6998E0608BA4BB8AB51436E1C6775C2BAFC2559A19B423E18678B60C9"
+        if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne $expected) { throw "Tesseract installer checksum mismatch" }
+        $dir = "C:\Program Files\Tesseract-OCR"
+        Start-Process -FilePath $exe -ArgumentList "/S", "/D=$dir" -Wait -NoNewWindow
+        if (-not (Test-Path "$dir\tesseract.exe")) { throw "Tesseract did not install to $dir" }
+        Add-Content -Path $env:GITHUB_PATH -Value $dir
     # eSpeak NG comes from its own release rather than Chocolatey, whose feed failed for
     # it in one of two parallel jobs. The installer is pinned by SHA-256.
     - name: Install eSpeak NG (Windows)
@@ -40,3 +53,12 @@ runs:
         $dir = "C:\Program Files\eSpeak NG"
         if (-not (Test-Path "$dir\espeak-ng.exe")) { throw "eSpeak NG did not install to $dir" }
         Add-Content -Path $env:GITHUB_PATH -Value $dir
+    # Every program is checked here, so a failed install stops the job with its name
+    # instead of surfacing later as failing tests.
+    - name: Check every program is on PATH
+      shell: bash
+      run: |
+        for program in ffmpeg ffprobe tesseract espeak-ng; do
+          command -v "$program" >/dev/null || { echo "$program was not installed"; exit 1; }
+          echo "$program: $(command -v "$program")"
+        done
